@@ -169,6 +169,55 @@ ipcMain.handle(CHANNELS.INTEGRATIONS.SAVE_PROJECT_MAPPING, async (event, { jiraP
   });
 });
 
+// Organization Handlers
+ipcMain.handle(CHANNELS.ORG.GET_SETTINGS, async () => {
+  return await fetchFromBackend("/api/org");
+});
+
+ipcMain.handle(CHANNELS.ORG.UPDATE, async (event, payload) => {
+  return await fetchFromBackend("/api/org/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {})
+  });
+});
+
+ipcMain.handle(CHANNELS.ORG.UPLOAD_LOGO, async (event, payload) => {
+  return await fetchFromBackend("/api/org/logo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {})
+  });
+});
+
+ipcMain.handle(CHANNELS.ORG.TRANSFER_OWNERSHIP, async (event, payload) => {
+  return await fetchFromBackend("/api/org/transfer-ownership", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {})
+  });
+});
+
+ipcMain.handle(CHANNELS.ORG.DELETE, async (event, payload) => {
+  return await fetchFromBackend("/api/org", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {})
+  });
+});
+
+ipcMain.handle(CHANNELS.ORG.GET_DB_STATUS, async () => {
+  return await fetchFromBackend("/api/org/db-status");
+});
+
+ipcMain.handle(CHANNELS.ORG.PROVISION_DB, async (event, payload) => {
+  return await fetchFromBackend("/api/org/provision-db", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {})
+  });
+});
+
 app.whenReady().then(() => {
   createWindow();
 

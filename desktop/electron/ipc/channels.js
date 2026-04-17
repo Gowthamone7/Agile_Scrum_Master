@@ -93,6 +93,17 @@ const CHANNELS = {
     SAVE_PROJECT_MAPPING: "integrations:saveJiraMapping"
   },
 
+  // Organization settings and management
+  ORG: {
+    GET_SETTINGS: "org:getSettings",
+    UPDATE: "org:update",
+    UPLOAD_LOGO: "org:uploadLogo",
+    TRANSFER_OWNERSHIP: "org:transferOwnership",
+    DELETE: "org:delete",
+    GET_DB_STATUS: "org:getDbStatus",
+    PROVISION_DB: "org:provisionDb"
+  },
+
   // Events (one-way from main to renderer)
   EVENTS: {
     UPDATE_STATUS: "updates:status",

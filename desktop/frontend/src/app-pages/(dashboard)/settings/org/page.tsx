@@ -34,25 +34,86 @@ type DbStatusResp = {
   error?: string;
 };
 
+type DesktopInvokeResponse<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopHttpLikeResponse<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+function isCurrentOrgResp(data: unknown): data is CurrentOrgResp {
+  return Boolean(data && typeof data === "object" && "org" in (data as Record<string, unknown>));
+}
+
 function extractError(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   if ("error" in data) {
     const err = (data as { error?: unknown }).error;
-    return typeof err === "string" && err ? err : null;
+    if (typeof err === "string" && err) return err;
+    if (err && typeof err === "object" && "message" in err) {
+      const msg = (err as { message?: unknown }).message;
+      return typeof msg === "string" && msg ? msg : null;
+    }
+    return null;
   }
   return null;
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopHttpLikeResponse<T>> {
+  if (!hasDesktopApi()) {
+    return {
+      ok: false,
+      status: 500,
+      data: null,
+    };
   }
-  return { ok: resp.ok, status: resp.status, data };
+
+  const raw = (await (window as { desktopApi: { invoke: (ch: string, args?: unknown) => Promise<unknown> } }).desktopApi.invoke(
+    channel,
+    payload,
+  )) as DesktopInvokeResponse<unknown>;
+
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    const errMsg = raw.error?.message;
+    return {
+      ok: false,
+      status: 500,
+      data: errMsg ? ({ error: errMsg } as T) : null,
+    };
+  }
+
+  const envelope = raw.data;
+  if (envelope && typeof envelope === "object" && "ok" in (envelope as Record<string, unknown>) && "status" in (envelope as Record<string, unknown>)) {
+    const normalized = envelope as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: (raw.data as T) ?? null,
+  };
 }
 
 export default function OrgSettingsPage() {
@@ -85,8 +146,8 @@ export default function OrgSettingsPage() {
     setSuccess(null);
 
     const [orgResp, dbResp] = await Promise.all([
-      fetchJson<CurrentOrgResp>("/api/org"),
-      fetchJson<DbStatusResp>("/api/org/db-status"),
+      invokeDesktop<CurrentOrgResp | Org>("org:getSettings"),
+      invokeDesktop<DbStatusResp>("org:getDbStatus"),
     ]);
 
     if (!orgResp.ok) {
@@ -99,10 +160,12 @@ export default function OrgSettingsPage() {
       return;
     }
 
-    const nextOrg = orgResp.data?.org ?? null;
+    const nextOrg = isCurrentOrgResp(orgResp.data) ? orgResp.data.org ?? null : (orgResp.data as Org | null);
     setOrg(nextOrg);
-    setPlan(orgResp.data?.plan ?? null);
-    setMemberCount(typeof orgResp.data?.memberCount === "number" ? orgResp.data.memberCount : null);
+    setPlan(isCurrentOrgResp(orgResp.data) ? orgResp.data.plan ?? null : null);
+    setMemberCount(
+      isCurrentOrgResp(orgResp.data) && typeof orgResp.data.memberCount === "number" ? orgResp.data.memberCount : null,
+    );
     setDbStatus(dbResp.ok ? dbResp.data : null);
 
     setName(nextOrg?.name || "");
@@ -132,15 +195,33 @@ export default function OrgSettingsPage() {
       return;
     }
 
-    const resp = await fetchJson<unknown>("/api/org/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: name.trim() || undefined,
+    let resolvedLogoUrl = logoUrl.trim() || undefined;
+    if (resolvedLogoUrl && resolvedLogoUrl.startsWith("data:image/")) {
+      const uploadResp = await invokeDesktop<{ logoUrl?: string }>("org:uploadLogo", {
+        base64Image: resolvedLogoUrl,
+      });
+      if (!uploadResp.ok || !uploadResp.data?.logoUrl) {
+        setSaving(false);
+        setError(extractError(uploadResp.data) || `Logo upload failed (${uploadResp.status})`);
+        return;
+      }
+      resolvedLogoUrl = uploadResp.data.logoUrl;
+      setLogoUrl(resolvedLogoUrl);
+    }
+
+    const resp = await invokeDesktop<unknown>("org:update", {
+      name: name.trim() || undefined,
+      description: undefined,
+      industry: undefined,
+      size: undefined,
+      preferences: {
         timezone: timezone.trim() || undefined,
-        logo_url: logoUrl.trim() || undefined,
-        notification_settings,
-      }),
+        logoUrl: resolvedLogoUrl,
+        notificationSettings: notification_settings,
+      },
+      timezone: timezone.trim() || undefined,
+      logo_url: resolvedLogoUrl,
+      notification_settings,
     });
 
     setSaving(false);
@@ -178,11 +259,7 @@ export default function OrgSettingsPage() {
         : { autoProvision: true }
       : { tenantDbConnectionString: connection };
 
-    const resp = await fetchJson<unknown>("/api/org/provision-db", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const resp = await invokeDesktop<unknown>("org:provisionDb", payload);
 
     setProvisioning(false);
     if (!resp.ok) {
@@ -193,6 +270,28 @@ export default function OrgSettingsPage() {
     setSuccess("Database setup completed.");
     setTenantDbConnectionString("");
     await load();
+  }
+
+  async function transferOwnership(newOwnerId: string): Promise<boolean> {
+    const resp = await invokeDesktop<{ success?: boolean }>("org:transferOwnership", { newOwnerId });
+    if (!resp.ok || !resp.data?.success) {
+      setError(extractError(resp.data) || `Transfer ownership failed (${resp.status})`);
+      return false;
+    }
+    return true;
+  }
+
+  async function deleteOrganization(confirmName: string): Promise<boolean> {
+    if (!org?.name || confirmName.trim() !== org.name) {
+      setError("Organization name confirmation does not match.");
+      return false;
+    }
+    const resp = await invokeDesktop<{ success?: boolean }>("org:delete", { confirmName: confirmName.trim() });
+    if (!resp.ok || !resp.data?.success) {
+      setError(extractError(resp.data) || `Delete organization failed (${resp.status})`);
+      return false;
+    }
+    return true;
   }
 
   return (
