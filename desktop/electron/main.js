@@ -218,6 +218,64 @@ ipcMain.handle(CHANNELS.ORG.PROVISION_DB, async (event, payload) => {
   });
 });
 
+// Preferences Handlers
+ipcMain.handle(CHANNELS.PREFERENCES.GET, async () => {
+  const [orgResp, meResp] = await Promise.all([
+    fetchFromBackend("/api/org"),
+    fetchFromBackend("/api/auth/me")
+  ]);
+
+  const orgOk = Boolean(orgResp && orgResp.ok && orgResp.data && orgResp.data.ok);
+  const meOk = Boolean(meResp && meResp.ok && meResp.data && meResp.data.ok);
+
+  if (!orgOk && !meOk) {
+    return IPCResponse.error("PREFERENCES_LOAD_FAILED", "Failed to load preferences", null);
+  }
+
+  const orgData = orgResp && orgResp.data ? orgResp.data.data : null;
+  const meData = meResp && meResp.data ? meResp.data.data : null;
+
+  return IPCResponse.success({
+    org: orgData && orgData.org ? orgData.org : null,
+    user: meData && meData.user ? meData.user : null,
+    notifications: {
+      sprintAlerts: true,
+      digestEmail: true,
+      assignmentAlerts: true
+    },
+    theme: "system",
+    language: "en"
+  });
+});
+
+ipcMain.handle(CHANNELS.PREFERENCES.UPDATE, async (event, payload) => {
+  const body = {
+    name: payload && payload.name ? payload.name : undefined,
+    timezone: payload && payload.timezone ? payload.timezone : undefined,
+    notification_settings: payload && payload.notifications ? payload.notifications : undefined,
+    language: payload && payload.language ? payload.language : undefined,
+    theme: payload && payload.theme ? payload.theme : undefined
+  };
+
+  return await fetchFromBackend("/api/org/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+});
+
+ipcMain.handle(CHANNELS.PREFERENCES.GET_AUTO_TASK_RULES, async () => {
+  return await fetchFromBackend("/api/integrations/github/auto-task-rules");
+});
+
+ipcMain.handle(CHANNELS.PREFERENCES.SAVE_AUTO_TASK_RULES, async (event, payload) => {
+  return await fetchFromBackend("/api/integrations/github/auto-task-rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload && payload.rules ? payload.rules : {})
+  });
+});
+
 app.whenReady().then(() => {
   createWindow();
 

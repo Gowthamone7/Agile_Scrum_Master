@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { useThemeStore } from "@/lib/theme-store";
+import { AutoTaskRulesPanel } from "@/components/auto-task-rules-panel";
 
 type OrgResponse = {
   org?: {
@@ -20,6 +21,29 @@ type MeResponse = {
   };
 };
 
+type PreferencesGetResponse = {
+  org?: OrgResponse["org"];
+  user?: MeResponse["user"];
+  notifications?: Partial<NotificationSettings>;
+  language?: string;
+};
+
+type DesktopInvokeEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
 type NotificationSettings = {
   sprintAlerts: boolean;
   digestEmail: boolean;
@@ -28,6 +52,62 @@ type NotificationSettings = {
 
 function asText(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function extractError(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  if (!("error" in data)) return null;
+  const err = (data as { error?: unknown }).error;
+  if (typeof err === "string" && err) return err;
+  if (err && typeof err === "object" && "message" in err) {
+    const msg = (err as { message?: unknown }).message;
+    return typeof msg === "string" && msg ? msg : null;
+  }
+  return null;
+}
+
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
+  }
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopInvokeEnvelope<unknown>;
+
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const envelope = raw.data;
+  if (envelope && typeof envelope === "object" && "ok" in (envelope as Record<string, unknown>) && "status" in (envelope as Record<string, unknown>)) {
+    const normalized = envelope as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: (raw.data as T) ?? null,
+  };
 }
 
 export default function PreferencesPage() {
@@ -43,6 +123,7 @@ export default function PreferencesPage() {
   const [timezone, setTimezone] = useState("UTC");
   const [userEmail, setUserEmail] = useState("");
   const [userName, setUserName] = useState("");
+  const [language] = useState("en");
   const [notifications, setNotifications] = useState<NotificationSettings>({
     sprintAlerts: true,
     digestEmail: true,
@@ -64,24 +145,30 @@ export default function PreferencesPage() {
       setLoading(true);
       setError(null);
 
-      const [orgResp, meResp] = await Promise.all([
-        fetch("/api/org", { cache: "no-store" }),
-        fetch("/api/auth/me", { cache: "no-store" }),
-      ]);
-
-      const orgData = (await orgResp.json().catch(() => null)) as OrgResponse | null;
-      const meData = (await meResp.json().catch(() => null)) as MeResponse | null;
+      const prefResp = await invokeDesktop<PreferencesGetResponse>("preferences:get");
 
       if (cancelled) return;
-      if (!orgResp.ok) {
-        setError(asText(orgData?.error) || `Failed to load org settings (${orgResp.status})`);
+      if (!prefResp.ok) {
+        setError(extractError(prefResp.data) || `Failed to load preferences (${prefResp.status})`);
+        setLoading(false);
+        return;
       }
 
-      setOrgName(asText(orgData?.org?.name));
-      setOrgSlug(asText(orgData?.org?.slug));
-      setTimezone(asText(orgData?.org?.timezone) || "UTC");
-      setUserEmail(asText(meData?.user?.email));
-      setUserName(asText(meData?.user?.fullName));
+      const prefData = prefResp.data;
+
+      setOrgName(asText(prefData?.org?.name));
+      setOrgSlug(asText(prefData?.org?.slug));
+      setTimezone(asText(prefData?.org?.timezone) || "UTC");
+      setUserEmail(asText(prefData?.user?.email));
+      setUserName(asText(prefData?.user?.fullName));
+      setNotifications((prev) => ({
+        sprintAlerts: typeof prefData?.notifications?.sprintAlerts === "boolean" ? prefData.notifications.sprintAlerts : prev.sprintAlerts,
+        digestEmail: typeof prefData?.notifications?.digestEmail === "boolean" ? prefData.notifications.digestEmail : prev.digestEmail,
+        assignmentAlerts:
+          typeof prefData?.notifications?.assignmentAlerts === "boolean"
+            ? prefData.notifications.assignmentAlerts
+            : prev.assignmentAlerts,
+      }));
       setLoading(false);
     }
 
@@ -96,17 +183,15 @@ export default function PreferencesPage() {
     setSaved(false);
     setError(null);
 
-    const resp = await fetch("/api/org/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: orgName.trim() || undefined,
-        timezone: timezone.trim() || undefined,
-        notification_settings: notificationPayload,
-      }),
+    const resp = await invokeDesktop<unknown>("preferences:update", {
+      name: orgName.trim() || undefined,
+      timezone: timezone.trim() || undefined,
+      notifications: notificationPayload,
+      language,
+      theme,
     });
 
-    const data = (await resp.json().catch(() => null)) as { error?: string } | null;
+    const data = resp.data as { error?: string } | null;
     setSaving(false);
 
     if (!resp.ok) {
@@ -188,6 +273,8 @@ export default function PreferencesPage() {
           <div className="text-sm text-slate-600 dark:text-slate-300">{userName || "User"}</div>
           <div className="text-sm text-slate-600 dark:text-slate-300">{userEmail || "—"}</div>
         </div>
+
+        <AutoTaskRulesPanel />
 
         <div className="flex items-center gap-3">
           <button

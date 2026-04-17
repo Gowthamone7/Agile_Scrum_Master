@@ -16,6 +16,22 @@ type RulesResponse = {
   detail?: string;
 };
 
+type DesktopInvokeEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
 const TASK_TYPES = ["task", "story", "bug"] as const;
 
 function fallbackRules(): AutoTaskRules {
@@ -39,6 +55,49 @@ function extractErrorText(data: unknown): string {
   return detail ? `${error}: ${detail}` : error;
 }
 
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  if (!hasDesktopApi()) {
+    return { ok: false, status: 500, data: null };
+  }
+
+  const raw = (await (window as { desktopApi: { invoke: (ch: string, args?: unknown) => Promise<unknown> } }).desktopApi.invoke(
+    channel,
+    payload,
+  )) as DesktopInvokeEnvelope<unknown>;
+
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const envelope = raw.data;
+  if (envelope && typeof envelope === "object" && "ok" in (envelope as Record<string, unknown>) && "status" in (envelope as Record<string, unknown>)) {
+    const normalized = envelope as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: (raw.data as T) ?? null,
+  };
+}
+
 export function AutoTaskRulesPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -55,8 +114,8 @@ export function AutoTaskRulesPanel() {
       setLoading(true);
       setError(null);
 
-      const resp = await fetch("/api/integrations/github/auto-task-rules", { cache: "no-store" });
-      const data = (await resp.json().catch(() => null)) as RulesResponse | null;
+      const resp = await invokeDesktop<RulesResponse>("preferences:getAutoTaskRules");
+      const data = resp.data;
 
       if (cancelled) return;
 
@@ -139,13 +198,11 @@ export function AutoTaskRulesPanel() {
       ),
     };
 
-    const resp = await fetch("/api/integrations/github/auto-task-rules", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+    const resp = await invokeDesktop<RulesResponse>("preferences:saveAutoTaskRules", {
+      rules: payload,
     });
 
-    const data = (await resp.json().catch(() => null)) as RulesResponse | null;
+    const data = resp.data;
 
     setSaving(false);
     if (!resp.ok) {

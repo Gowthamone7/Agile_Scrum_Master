@@ -104,6 +104,14 @@ const CHANNELS = {
     PROVISION_DB: "org:provisionDb"
   },
 
+  // User preferences
+  PREFERENCES: {
+    GET: "preferences:get",
+    UPDATE: "preferences:update",
+    GET_AUTO_TASK_RULES: "preferences:getAutoTaskRules",
+    SAVE_AUTO_TASK_RULES: "preferences:saveAutoTaskRules"
+  },
+
   // Events (one-way from main to renderer)
   EVENTS: {
     UPDATE_STATUS: "updates:status",
