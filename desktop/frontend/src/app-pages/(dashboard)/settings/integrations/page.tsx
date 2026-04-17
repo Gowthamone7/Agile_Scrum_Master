@@ -120,6 +120,18 @@ type GithubWebhookDeliveriesResponse = {
   items?: GithubWebhookDelivery[];
 };
 
+// Type for IPC response envelope
+type IPCResult<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code: string;
+    message: string;
+    detail?: string | null;
+  } | null;
+  timestamp?: number;
+};
+
 function asRecord(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
 }
@@ -143,21 +155,109 @@ function extractError(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   if ("error" in data) {
     const err = (data as { error?: unknown }).error;
-    return typeof err === "string" && err ? err : null;
+    if (typeof err === "string" && err) return err;
+    if (typeof err === "object" && err && "message" in err) {
+      return (err as { message?: unknown }).message as string;
+    }
+    return null;
   }
   return null;
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+// Wrapper for IPC or HTTP fetching
+async function fetchJson<T>(
+  url: string,
+  init?: RequestInit
+): Promise<{ ok: boolean; status: number; data: T | null }> {
+  const isElectron = typeof window !== "undefined" && (window as any).desktopApi;
+
+  if (!isElectron) {
+    // Fall back to HTTP if not in Electron
+    const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
+    const text = await resp.text().catch(() => "");
+    let data: T | null = null;
+    try {
+      data = text ? (JSON.parse(text) as T) : null;
+    } catch {
+      data = null;
+    }
+    return { ok: resp.ok, status: resp.status, data };
   }
-  return { ok: resp.ok, status: resp.status, data };
+
+  // Use IPC for Electron
+  try {
+    const method = init?.method || "GET";
+    let channel: string | null = null;
+    let payload: any = {};
+
+    // Route HTTP calls to appropriate IPC channels
+    if (url === "/api/integrations/jira/status") {
+      channel = "integrations:getJiraStatus";
+    } else if (url === "/api/integrations/jira/projects") {
+      channel = "integrations:getJiraProjects";
+    } else if (url === "/api/integrations/jira/sync-status") {
+      channel = "integrations:getJiraSyncStatus";
+    } else if (url === "/api/integrations/jira/webhook-logs") {
+      channel = "integrations:getJiraWebhookLogs";
+    } else if (url === "/api/integrations/github/status") {
+      channel = "integrations:getGithubStatus";
+    } else if (url === "/api/integrations/github/webhook-status") {
+      channel = "integrations:getGithubWebhookStatus";
+    } else if (url === "/api/integrations/github/webhook-deliveries") {
+      channel = "integrations:getGithubWebhookDeliveries";
+    } else if (url === "/api/integrations/jira/connect" && method === "POST") {
+      channel = "integrations:connectJira";
+      payload = JSON.parse(init?.body as string);
+    } else if (url.match(/^\/api\/integrations\/jira\/webhook-logs\/.*\/retry$/) && method === "POST") {
+      const eventId = url.split("/")[5];
+      channel = "integrations:retryJiraWebhook";
+      payload = { eventId };
+    } else if (url === "/api/webhooks/jira/test" && method === "POST") {
+      channel = "integrations:testJiraWebhook";
+      payload = JSON.parse(init?.body as string);
+    } else if (url === "/api/integrations/jira/sync" && method === "POST") {
+      channel = "integrations:syncJiraNow";
+      payload = JSON.parse(init?.body as string);
+    } else if (url === "/api/integrations/jira/sync-schedule" && method === "PATCH") {
+      channel = "integrations:updateJiraSyncSchedule";
+      payload = JSON.parse(init?.body as string);
+    } else if (url.match(/^\/api\/integrations\/github\/webhooks\/redeliver\/.*$/) && method === "POST") {
+      const deliveryId = url.split("/")[6];
+      channel = "integrations:redeliverGithubWebhook";
+      payload = { deliveryId };
+    }
+
+    if (!channel) {
+      throw new Error(`Unmapped endpoint: ${url}`);
+    }
+
+    const result = await (window as any).desktopApi.invoke(channel, payload);
+    
+    if (!result.ok) {
+      // Extract status from error response or default to 500
+      const status = result.error?.code === "FETCH_ERROR" ? 503 : 500;
+      return {
+        ok: false,
+        status,
+        data: result.error ? { error: result.error.message } as T : null
+      };
+    }
+
+    // If data contains the actual response (with ok, status, data)
+    if (result.data && typeof result.data === "object" && "ok" in result.data && "data" in result.data) {
+      const wrappedData = result.data as any;
+      return {
+        ok: wrappedData.ok,
+        status: wrappedData.status,
+        data: wrappedData.data as T
+      };
+    }
+
+    return { ok: true, status: 200, data: result.data as T };
+  } catch (error) {
+    console.error("IPC call failed:", error);
+    return { ok: false, status: 500, data: null };
+  }
 }
 
 function IntegrationsSettingsContent() {

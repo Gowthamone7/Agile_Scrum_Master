@@ -66,6 +66,33 @@ const CHANNELS = {
     RESUME_SYNC: "sync:resumeSync"
   },
 
+  // Integration management (Jira, GitHub, Slack)
+  INTEGRATIONS: {
+    // Jira
+    GET_JIRA_STATUS: "integrations:getJiraStatus",
+    GET_JIRA_PROJECTS: "integrations:getJiraProjects",
+    GET_JIRA_SYNC_STATUS: "integrations:getJiraSyncStatus",
+    GET_JIRA_WEBHOOK_LOGS: "integrations:getJiraWebhookLogs",
+    CONNECT_JIRA: "integrations:connectJira",
+    RETRY_JIRA_WEBHOOK: "integrations:retryJiraWebhook",
+    TEST_JIRA_WEBHOOK: "integrations:testJiraWebhook",
+    SYNC_JIRA_NOW: "integrations:syncJiraNow",
+    UPDATE_JIRA_SYNC_SCHEDULE: "integrations:updateJiraSyncSchedule",
+
+    // GitHub
+    GET_GITHUB_STATUS: "integrations:getGithubStatus",
+    GET_GITHUB_WEBHOOK_STATUS: "integrations:getGithubWebhookStatus",
+    GET_GITHUB_WEBHOOK_DELIVERIES: "integrations:getGithubWebhookDeliveries",
+    REDELIVER_GITHUB_WEBHOOK: "integrations:redeliverGithubWebhook",
+
+    // Generic config
+    GET_CONFIG: "integrations:getConfig",
+    UPDATE_CONFIG: "integrations:updateConfig",
+    REGENERATE_WEBHOOK_SECRET: "integrations:regenerateWebhookSecret",
+    GET_PROJECT_MAPPINGS: "integrations:getJiraProjectMappings",
+    SAVE_PROJECT_MAPPING: "integrations:saveJiraMapping"
+  },
+
   // Events (one-way from main to renderer)
   EVENTS: {
     UPDATE_STATUS: "updates:status",
