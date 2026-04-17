@@ -276,6 +276,93 @@ ipcMain.handle(CHANNELS.PREFERENCES.SAVE_AUTO_TASK_RULES, async (event, payload)
   });
 });
 
+// Profile Handlers
+ipcMain.handle(CHANNELS.PROFILE.GET, async () => {
+  const profileResp = await fetchFromBackend("/api/profile");
+  if (profileResp && profileResp.ok && profileResp.data && profileResp.data.ok) {
+    return profileResp;
+  }
+
+  const meResp = await fetchFromBackend("/api/auth/me");
+  if (!(meResp && meResp.ok && meResp.data && meResp.data.ok)) {
+    return IPCResponse.error("PROFILE_LOAD_FAILED", "Failed to load profile", null);
+  }
+
+  const meData = meResp.data && meResp.data.data ? meResp.data.data : null;
+  const memberships = Array.isArray(meData && meData.memberships) ? meData.memberships : [];
+  const activeOrgId = meData && meData.activeOrgId ? String(meData.activeOrgId) : "";
+  const activeMembership = memberships.find((m) => String((m && m.org && m.org.id) || "") === activeOrgId) || memberships[0] || null;
+
+  return IPCResponse.success({
+    ok: true,
+    status: 200,
+    data: {
+      displayName: meData && meData.user && meData.user.fullName ? meData.user.fullName : "",
+      title: "",
+      bio: "",
+      phone: "",
+      timezone: "",
+      email: meData && meData.user && meData.user.email ? meData.user.email : "",
+      orgName: activeMembership && activeMembership.org ? (activeMembership.org.name || activeMembership.org.slug || "No organization") : "No organization",
+      connectedProviders: []
+    }
+  });
+});
+
+ipcMain.handle(CHANNELS.PROFILE.UPDATE, async (event, payload) => {
+  return await fetchFromBackend("/api/profile", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      displayName: payload && payload.displayName ? payload.displayName : undefined,
+      title: payload && payload.title ? payload.title : undefined,
+      bio: payload && payload.bio ? payload.bio : undefined,
+      phone: payload && payload.phone ? payload.phone : undefined
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.PROFILE.UPLOAD_AVATAR, async (event, payload) => {
+  return await fetchFromBackend("/api/profile/avatar", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base64Image: payload && payload.base64Image ? payload.base64Image : "" })
+  });
+});
+
+ipcMain.handle(CHANNELS.PROFILE.CHANGE_EMAIL, async (event, payload) => {
+  return await fetchFromBackend("/api/profile/change-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      newEmail: payload && payload.newEmail ? payload.newEmail : "",
+      password: payload && payload.password ? payload.password : ""
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.PROFILE.GET_SESSIONS, async () => {
+  const profileSessionsResp = await fetchFromBackend("/api/profile/sessions");
+  if (profileSessionsResp && profileSessionsResp.ok && profileSessionsResp.data && profileSessionsResp.data.ok) {
+    return profileSessionsResp;
+  }
+  return await fetchFromBackend("/api/auth/sessions");
+});
+
+ipcMain.handle(CHANNELS.PROFILE.REVOKE_SESSION, async (event, payload) => {
+  return await fetchFromBackend(`/api/profile/sessions/${encodeURIComponent(String(payload && payload.sessionId ? payload.sessionId : ""))}/revoke`, {
+    method: "POST"
+  });
+});
+
+ipcMain.handle(CHANNELS.PROFILE.TOGGLE_2FA, async (event, payload) => {
+  return await fetchFromBackend("/api/profile/2fa", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: Boolean(payload && payload.enabled) })
+  });
+});
+
 app.whenReady().then(() => {
   createWindow();
 

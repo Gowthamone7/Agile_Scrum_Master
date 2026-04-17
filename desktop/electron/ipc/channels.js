@@ -112,6 +112,17 @@ const CHANNELS = {
     SAVE_AUTO_TASK_RULES: "preferences:saveAutoTaskRules"
   },
 
+  // User profile and account security
+  PROFILE: {
+    GET: "profile:get",
+    UPDATE: "profile:update",
+    UPLOAD_AVATAR: "profile:uploadAvatar",
+    CHANGE_EMAIL: "profile:changeEmail",
+    GET_SESSIONS: "profile:getSessions",
+    REVOKE_SESSION: "profile:revokeSession",
+    TOGGLE_2FA: "profile:toggle2FA"
+  },
+
   // Events (one-way from main to renderer)
   EVENTS: {
     UPDATE_STATUS: "updates:status",

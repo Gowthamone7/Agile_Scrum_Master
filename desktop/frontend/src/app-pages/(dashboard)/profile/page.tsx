@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "@/next-shims/link";
 import { User, Save } from "lucide-react";
-import { getMe } from "@/lib/org-member-auth";
 
 type ProfileDraft = {
   displayName: string;
@@ -13,12 +12,101 @@ type ProfileDraft = {
   bio: string;
 };
 
-const STORAGE_KEY = "asm.profile.draft";
+type UserProfile = {
+  displayName?: string;
+  title?: string;
+  phone?: string;
+  timezone?: string;
+  bio?: string;
+  email?: string;
+  orgName?: string;
+};
+
+type Session = {
+  id: string;
+  createdAt?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  current?: boolean;
+};
+
+type DesktopEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+function extractError(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  if (!("error" in data)) return null;
+  const err = (data as { error?: unknown }).error;
+  if (typeof err === "string" && err) return err;
+  if (err && typeof err === "object" && "message" in err) {
+    const msg = (err as { message?: unknown }).message;
+    return typeof msg === "string" && msg ? msg : null;
+  }
+  return null;
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
+  }
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopEnvelope<unknown>;
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const wrapped = raw.data;
+  if (wrapped && typeof wrapped === "object" && "ok" in (wrapped as Record<string, unknown>) && "status" in (wrapped as Record<string, unknown>)) {
+    const normalized = wrapped as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: (raw.data as T) ?? null,
+  };
+}
 
 export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<{ email: string; fullName: string; orgName: string } | null>(null);
+  const [, setSessions] = useState<Session[]>([]);
   const [draft, setDraft] = useState<ProfileDraft>({
     displayName: "",
     title: "",
@@ -30,37 +118,40 @@ export default function ProfilePage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const me = await getMe();
+      setError(null);
+
+      const [profileResp, sessionsResp] = await Promise.all([
+        invokeDesktop<UserProfile>("profile:get"),
+        invokeDesktop<Session[]>("profile:getSessions"),
+      ]);
+
       if (cancelled) return;
 
-      const memberships = Array.isArray(me?.memberships) ? me!.memberships! : [];
-      const activeOrgId = me?.activeOrgId ? String(me.activeOrgId) : "";
-      const activeMembership = memberships.find((m) => String(m?.org?.id || "") === activeOrgId) || memberships[0] || null;
-
-      const fullName = String(me?.user?.fullName || "");
-      const email = String(me?.user?.email || "");
-      const orgName = String(activeMembership?.org?.name || activeMembership?.org?.slug || "No organization");
-
-      setAccount({ email, fullName, orgName });
-
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw) as Partial<ProfileDraft>;
-          setDraft((prev) => ({
-            ...prev,
-            displayName: String(parsed.displayName || fullName),
-            title: String(parsed.title || ""),
-            phone: String(parsed.phone || ""),
-            timezone: String(parsed.timezone || ""),
-            bio: String(parsed.bio || ""),
-          }));
-        } catch {
-          setDraft((prev) => ({ ...prev, displayName: fullName }));
-        }
-      } else {
-        setDraft((prev) => ({ ...prev, displayName: fullName }));
+      if (!profileResp.ok) {
+        setError(extractError(profileResp.data) || `Failed to load profile (${profileResp.status})`);
+        setLoading(false);
+        return;
       }
+
+      const profile = profileResp.data;
+      setAccount({
+        email: String(profile?.email || ""),
+        fullName: String(profile?.displayName || ""),
+        orgName: String(profile?.orgName || "No organization"),
+      });
+
+      setDraft({
+        displayName: String(profile?.displayName || ""),
+        title: String(profile?.title || ""),
+        phone: String(profile?.phone || ""),
+        timezone: String(profile?.timezone || ""),
+        bio: String(profile?.bio || ""),
+      });
+
+      if (sessionsResp.ok) {
+        setSessions(Array.isArray(sessionsResp.data) ? sessionsResp.data : []);
+      }
+
       setLoading(false);
     })();
 
@@ -69,9 +160,21 @@ export default function ProfilePage() {
     };
   }, []);
 
-  function saveProfile() {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
+  async function saveProfile() {
+    setError(null);
+
+    const resp = await invokeDesktop<UserProfile>("profile:update", {
+      displayName: draft.displayName,
+      title: draft.title,
+      bio: draft.bio,
+      phone: draft.phone,
+    });
+
+    if (!resp.ok) {
+      setError(extractError(resp.data) || `Failed to save profile (${resp.status})`);
+      return;
+    }
+
     setSaved(true);
     window.setTimeout(() => setSaved(false), 1800);
   }
