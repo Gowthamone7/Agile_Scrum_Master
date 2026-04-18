@@ -25,6 +25,23 @@ type Task = {
   points?: number;
 };
 
+type SprintSummary = {
+  velocity?: Partial<Velocity>;
+  burndown?: BurndownPoint[];
+  alerts?: AlertsResp["items"];
+  risk?: Risk;
+};
+
+type MemberContribution = {
+  memberId?: string;
+  userId?: string;
+  name?: string;
+  fullName?: string;
+  completedTasks?: number;
+  pointsCompleted?: number;
+  contributionPct?: number;
+};
+
 type Velocity = {
   currentVelocity: number;
   requiredVelocity: number;
@@ -154,9 +171,11 @@ export default function SprintDetailPage() {
     setLoading(true);
     setError(null);
 
-    const [sResp, tResp] = await Promise.all([
-      invokeDesktop<SprintGetResp>("sprint:getById", { sprintId }),
-      invokeDesktop<Task[]>("sprint:getTasks", { sprintId }),
+    const [sResp, tResp, summaryResp, contribResp] = await Promise.all([
+      invokeDesktop<SprintGetResp>("sprints:getById", { sprintId }),
+      invokeDesktop<Task[]>("sprints:getTasks", { sprintId }),
+      invokeDesktop<SprintSummary>("sprints:getSummary", { sprintId }),
+      invokeDesktop<MemberContribution[]>("sprints:getContributions", { sprintId }),
     ]);
 
     if (!sResp.ok) {
@@ -183,52 +202,73 @@ export default function SprintDetailPage() {
     const plannedPoints = Number(nextSprint?.plannedPoints ?? totalTasks);
     const completedPoints = Number(nextSprint?.completedPoints ?? completedTasks);
 
-    const currentVelocity = Math.max(0, completedTasks);
-    const requiredVelocity = daysRemaining > 0 ? Math.max(0, (plannedPoints - completedPoints) / daysRemaining) : 0;
-    const onTrack = completedPoints >= Math.floor(plannedPoints * 0.5) || requiredVelocity <= Math.max(1, currentVelocity);
+    const summary = summaryResp.ok && summaryResp.data && typeof summaryResp.data === "object" ? summaryResp.data : null;
+    const summaryVelocity = summary && summary.velocity && typeof summary.velocity === "object" ? summary.velocity : null;
+
+    const currentVelocity = Number(summaryVelocity?.currentVelocity ?? completedTasks);
+    const requiredVelocity = Number(summaryVelocity?.requiredVelocity ?? (daysRemaining > 0 ? Math.max(0, (plannedPoints - completedPoints) / daysRemaining) : 0));
+    const onTrack = typeof summaryVelocity?.onTrack === "boolean"
+      ? summaryVelocity.onTrack
+      : completedPoints >= Math.floor(plannedPoints * 0.5) || requiredVelocity <= Math.max(1, currentVelocity);
 
     setVelocity({
       currentVelocity,
       requiredVelocity,
-      gapPct: plannedPoints > 0 ? ((plannedPoints - completedPoints) / plannedPoints) * 100 : 0,
+      gapPct: Number(summaryVelocity?.gapPct ?? (plannedPoints > 0 ? ((plannedPoints - completedPoints) / plannedPoints) * 100 : 0)),
       onTrack,
-      daysRemaining,
+      daysRemaining: Number(summaryVelocity?.daysRemaining ?? daysRemaining),
     });
 
-    const alertItems: AlertsResp["items"] = [];
-    if (blockedTasks > 0) {
-      alertItems.push({
-        id: "blocked-tasks",
-        severity: "high",
-        title: "Blocked tasks detected",
-        message: `${blockedTasks} task(s) are currently blocked in this sprint.",
-        createdAt: new Date().toISOString(),
-        acknowledged: false,
-      });
-    }
-    if (!onTrack) {
-      alertItems.push({
-        id: "velocity-risk",
-        severity: "medium",
-        title: "Velocity risk",
-        message: "Current progress is behind the projected sprint completion pace.",
-        createdAt: new Date().toISOString(),
-        acknowledged: false,
-      });
+    const alertItems: AlertsResp["items"] = Array.isArray(summary?.alerts)
+      ? summary.alerts
+      : [];
+    if (!alertItems.length) {
+      if (blockedTasks > 0) {
+        alertItems.push({
+          id: "blocked-tasks",
+          severity: "high",
+          title: "Blocked tasks detected",
+          message: `${blockedTasks} task(s) are currently blocked in this sprint.`,
+          createdAt: new Date().toISOString(),
+          acknowledged: false,
+        });
+      }
+      if (!onTrack) {
+        alertItems.push({
+          id: "velocity-risk",
+          severity: "medium",
+          title: "Velocity risk",
+          message: "Current progress is behind the projected sprint completion pace.",
+          createdAt: new Date().toISOString(),
+          acknowledged: false,
+        });
+      }
     }
     setAlerts({ items: alertItems });
 
+    const contributions = contribResp.ok && Array.isArray(contribResp.data) ? contribResp.data : [];
+    const summaryBurndown = Array.isArray(summary?.burndown) ? summary.burndown : [];
+    setBurndown(summaryBurndown);
+
+    const baseRisk = summary && summary.risk && typeof summary.risk === "object" ? summary.risk : {};
+
     setRisk({
+      ...baseRisk,
       totalTasks,
       completedTasks,
       blockedTasks,
       daysRemaining,
       plannedPoints,
       completedPoints,
+      contributors: contributions.length,
+      topContributors: contributions.slice(0, 3).map((contrib) => ({
+        id: String(contrib.memberId || contrib.userId || ""),
+        name: String(contrib.name || contrib.fullName || "Member"),
+        completedTasks: Number(contrib.completedTasks ?? 0),
+        pointsCompleted: Number(contrib.pointsCompleted ?? 0),
+      })),
       status: nextSprint?.status || "unknown",
     });
-
-    setBurndown([]);
 
     setLoading(false);
   }
@@ -240,13 +280,13 @@ export default function SprintDetailPage() {
 
   async function startSprint() {
     if (!hasId) return;
-    await invokeDesktop<Sprint>("sprint:update", { sprintId, changes: { status: "active" } });
+    await invokeDesktop<Sprint>("sprints:update", { sprintId, changes: { status: "active" } });
     await load();
   }
 
   async function completeSprint() {
     if (!hasId) return;
-    await invokeDesktop<Sprint>("sprint:update", { sprintId, changes: { status: "completed" } });
+    await invokeDesktop<Sprint>("sprints:update", { sprintId, changes: { status: "completed" } });
     await load();
   }
 

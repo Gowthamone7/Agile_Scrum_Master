@@ -594,6 +594,43 @@ ipcMain.handle(CHANNELS.SPRINTS.CREATE, async (event, payload) => {
   });
 });
 
+ipcMain.handle(CHANNELS.SPRINTS.GET_BY_ID, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}`);
+});
+
+ipcMain.handle(CHANNELS.SPRINTS.GET_TASKS, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/tasks`);
+});
+
+ipcMain.handle(CHANNELS.SPRINTS.UPDATE, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  const changes = payload && payload.changes && typeof payload.changes === "object" ? payload.changes : {};
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes)
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINTS.DELETE, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}`, {
+    method: "DELETE"
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINTS.GET_SUMMARY, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/summary`);
+});
+
+ipcMain.handle(CHANNELS.SPRINTS.GET_CONTRIBUTIONS, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/contributions`);
+});
+
 // Sprint Plan Handlers
 ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_BACKLOG, async (event, payload) => {
   const query = new URLSearchParams();

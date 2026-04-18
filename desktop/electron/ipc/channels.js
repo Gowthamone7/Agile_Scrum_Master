@@ -162,7 +162,13 @@ const CHANNELS = {
   // Sprints listing and creation
   SPRINTS: {
     GET_ALL: "sprints:getAll",
-    CREATE: "sprints:create"
+    CREATE: "sprints:create",
+    GET_BY_ID: "sprints:getById",
+    GET_TASKS: "sprints:getTasks",
+    UPDATE: "sprints:update",
+    DELETE: "sprints:delete",
+    GET_SUMMARY: "sprints:getSummary",
+    GET_CONTRIBUTIONS: "sprints:getContributions"
   },
 
   // Sprint planning
