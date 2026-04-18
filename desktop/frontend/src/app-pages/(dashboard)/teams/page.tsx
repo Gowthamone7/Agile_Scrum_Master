@@ -45,16 +45,122 @@ type MeResponse = {
   memberships?: Array<{ org: { id: string }; role: string }>;
 };
 
+type DesktopEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
   }
-  return { ok: resp.ok, status: resp.status, data };
+
+  const method = String(init?.method || "GET").toUpperCase();
+  const bodyRaw = typeof init?.body === "string" ? init.body : "";
+  const body = bodyRaw ? (JSON.parse(bodyRaw) as Record<string, unknown>) : {};
+
+  let channel = "";
+  let payload = {} as Record<string, unknown>;
+
+  if (method === "GET" && url === "/api/auth/me") {
+    channel = "teams:getMe";
+  } else if (method === "GET" && url === "/api/teams") {
+    channel = "teams:getAll";
+  } else if (method === "GET" && url === "/api/org/members?page=1&limit=200") {
+    channel = "teams:getOrgMembers";
+  } else if (method === "POST" && url === "/api/teams") {
+    channel = "teams:create";
+    payload = {
+      name: body.name,
+      description: body.description,
+      leadId: body.leadId,
+    };
+  } else if (method === "DELETE" && /^\/api\/teams\/[^/]+$/.test(url)) {
+    const teamId = decodeURIComponent(url.split("/")[3] || "");
+    channel = "teams:delete";
+    payload = { teamId };
+  } else if (method === "PATCH" && /^\/api\/teams\/[^/]+$/.test(url)) {
+    const teamId = decodeURIComponent(url.split("/")[3] || "");
+    channel = "teams:update";
+    payload = { teamId, changes: body };
+  } else if (method === "GET" && /^\/api\/teams\/[^/]+\/members$/.test(url)) {
+    const teamId = decodeURIComponent(url.split("/")[3] || "");
+    channel = "teams:getMembers";
+    payload = { teamId };
+  } else if (method === "POST" && /^\/api\/teams\/[^/]+\/members$/.test(url)) {
+    const teamId = decodeURIComponent(url.split("/")[3] || "");
+    channel = "teams:addMember";
+    payload = { teamId, userId: body.memberId, role: body.role };
+  } else if (method === "DELETE" && /^\/api\/teams\/[^/]+\/members\/[^/]+$/.test(url)) {
+    const parts = url.split("/");
+    const teamId = decodeURIComponent(parts[3] || "");
+    const userId = decodeURIComponent(parts[5] || "");
+    channel = "teams:removeMember";
+    payload = { teamId, userId };
+  } else if (method === "GET" && /^\/api\/teams\/[^/]+\/join-requests$/.test(url)) {
+    const teamId = decodeURIComponent(url.split("/")[3] || "");
+    channel = "teams:getJoinRequests";
+    payload = { teamId };
+  } else if (method === "POST" && /^\/api\/teams\/[^/]+\/join-requests$/.test(url)) {
+    const teamId = decodeURIComponent(url.split("/")[3] || "");
+    channel = "teams:createJoinRequest";
+    payload = { teamId, note: body.note };
+  } else if (method === "PATCH" && /^\/api\/teams\/join-requests\/[^/]+$/.test(url)) {
+    const requestId = decodeURIComponent(url.split("/")[4] || "");
+    channel = "teams:reviewJoinRequest";
+    payload = { requestId, status: body.status };
+  } else if (method === "GET" && /^\/api\/teams\/[^/]+\/scores$/.test(url)) {
+    const teamId = decodeURIComponent(url.split("/")[3] || "");
+    channel = "teams:getScores";
+    payload = { teamId };
+  } else if (method === "PATCH" && /^\/api\/teams\/[^/]+\/scores\/[^/]+$/.test(url)) {
+    const parts = url.split("/");
+    const teamId = decodeURIComponent(parts[3] || "");
+    const memberId = decodeURIComponent(parts[5] || "");
+    channel = "teams:updateScore";
+    payload = {
+      teamId,
+      memberId,
+      score: body.score,
+      metric: body.metric,
+    };
+  } else {
+    return { ok: false, status: 400, data: null };
+  }
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopEnvelope<unknown>;
+  if (!raw?.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw?.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const wrapped = raw.data;
+  if (wrapped && typeof wrapped === "object" && "ok" in (wrapped as Record<string, unknown>) && "status" in (wrapped as Record<string, unknown>)) {
+    const normalized = wrapped as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return { ok: true, status: 200, data: (raw.data as T) ?? null };
 }
 
 function roleCanAdmin(role: string | null | undefined) {

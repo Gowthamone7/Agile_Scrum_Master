@@ -123,6 +123,42 @@ const CHANNELS = {
     TOGGLE_2FA: "profile:toggle2FA"
   },
 
+  // Team management
+  TEAMS: {
+    GET_ALL: "teams:getAll",
+    CREATE: "teams:create",
+    UPDATE: "teams:update",
+    DELETE: "teams:delete",
+    ADD_MEMBER: "teams:addMember",
+    REMOVE_MEMBER: "teams:removeMember",
+    GET_ME: "teams:getMe",
+    GET_ORG_MEMBERS: "teams:getOrgMembers",
+    GET_MEMBERS: "teams:getMembers",
+    GET_JOIN_REQUESTS: "teams:getJoinRequests",
+    CREATE_JOIN_REQUEST: "teams:createJoinRequest",
+    REVIEW_JOIN_REQUEST: "teams:reviewJoinRequest",
+    GET_SCORES: "teams:getScores",
+    UPDATE_SCORE: "teams:updateScore"
+  },
+
+  // Skill gap analysis
+  SKILL_GAP: {
+    GET_MATRIX: "skillGap:getMatrix",
+    UPDATE_SKILL_LEVEL: "skillGap:updateSkillLevel",
+    GET_REQUIRED_SKILLS: "skillGap:getRequiredSkills",
+    ASSIGN_TRAINING: "skillGap:assignTraining"
+  },
+
+  // Sprint overview
+  SPRINT: {
+    GET_BY_ID: "sprint:getById",
+    GET_CURRENT: "sprint:getCurrent",
+    GET_TASKS: "sprint:getTasks",
+    UPDATE: "sprint:update",
+    UPDATE_STATUS: "sprint:updateStatus",
+    GET_EVENTS: "sprint:getEvents"
+  },
+
   // Events (one-way from main to renderer)
   EVENTS: {
     UPDATE_STATUS: "updates:status",

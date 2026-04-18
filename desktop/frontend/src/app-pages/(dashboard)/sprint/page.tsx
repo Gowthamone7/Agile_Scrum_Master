@@ -9,24 +9,74 @@ type Sprint = {
   projectId?: string;
   name: string;
   status: string;
+  goal?: string;
   startDate?: string;
   endDate?: string;
   plannedPoints?: number;
   completedPoints?: number;
 };
 
-type SprintsResp = { items?: Sprint[]; error?: string };
+type Task = {
+  id: string;
+  status?: string;
+  title?: string;
+};
 
-async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null; text?: string }> {
-  const resp = await fetch(url, { cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+type SprintEvent = {
+  id: string;
+  type?: string;
+  date?: string;
+};
+
+type DesktopEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
   }
-  return { ok: resp.ok, status: resp.status, data, text };
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopEnvelope<unknown>;
+  if (!raw?.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw?.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const wrapped = raw.data;
+  if (wrapped && typeof wrapped === "object" && "ok" in (wrapped as Record<string, unknown>) && "status" in (wrapped as Record<string, unknown>)) {
+    const normalized = wrapped as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return { ok: true, status: 200, data: (raw.data as T) ?? null };
 }
 
 export default function SprintListPage() {
@@ -35,6 +85,8 @@ export default function SprintListPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionSprintId, setActionSprintId] = useState<string | null>(null);
+  const [, setTasks] = useState<Task[]>([]);
+  const [, setEvents] = useState<SprintEvent[]>([]);
 
   const tabs = useMemo(
     () => [
@@ -50,17 +102,36 @@ export default function SprintListPage() {
     setLoading(true);
     setError(null);
 
-    const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-    const resp = await fetchJson<SprintsResp>(`/api/sprints${qs}`);
+    const resp = await invokeDesktop<Sprint | null>("sprint:getCurrent");
 
     if (!resp.ok) {
       setItems([]);
       setLoading(false);
-      setError(resp.data?.error ? String(resp.data.error) : `Failed to load sprints (${resp.status})`);
+      setError(`Failed to load sprint (${resp.status})`);
       return;
     }
 
-    setItems(Array.isArray(resp.data?.items) ? resp.data.items! : []);
+    const current = resp.data;
+    if (!current) {
+      setItems([]);
+      setTasks([]);
+      setEvents([]);
+      setLoading(false);
+      return;
+    }
+
+    const normalizedStatus = String(current.status || "").toLowerCase();
+    const shouldShow = !status || normalizedStatus === String(status).toLowerCase();
+    setItems(shouldShow ? [current] : []);
+
+    const [taskResp, eventResp] = await Promise.all([
+      invokeDesktop<Task[]>("sprint:getTasks", { sprintId: current.id }),
+      invokeDesktop<SprintEvent[]>("sprint:getEvents", { sprintId: current.id }),
+    ]);
+
+    if (taskResp.ok) setTasks(Array.isArray(taskResp.data) ? taskResp.data : []);
+    if (eventResp.ok) setEvents(Array.isArray(eventResp.data) ? eventResp.data : []);
+
     setLoading(false);
   }
 
@@ -74,9 +145,8 @@ export default function SprintListPage() {
     setError(null);
     setActionSprintId(sprintId);
     try {
-      const resp = await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/archive`, { method: "PATCH" });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to archive sprint"));
+      const resp = await invokeDesktop<Sprint>("sprint:updateStatus", { sprintId, status: "completed" });
+      if (!resp.ok) throw new Error("Failed to archive sprint");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to archive sprint");
@@ -90,9 +160,8 @@ export default function SprintListPage() {
     setError(null);
     setActionSprintId(sprintId);
     try {
-      const resp = await fetch(`/api/sprints/${encodeURIComponent(sprintId)}`, { method: "DELETE" });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to delete sprint"));
+      const resp = await invokeDesktop<Sprint>("sprint:updateStatus", { sprintId, status: "cancelled" });
+      if (!resp.ok) throw new Error("Failed to delete sprint");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete sprint");

@@ -363,6 +363,203 @@ ipcMain.handle(CHANNELS.PROFILE.TOGGLE_2FA, async (event, payload) => {
   });
 });
 
+// Teams Handlers
+ipcMain.handle(CHANNELS.TEAMS.GET_ALL, async () => {
+  return await fetchFromBackend("/api/teams");
+});
+
+ipcMain.handle(CHANNELS.TEAMS.CREATE, async (event, payload) => {
+  return await fetchFromBackend("/api/teams", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload && payload.name ? payload.name : "",
+      description: payload && payload.description ? payload.description : undefined,
+      leadId: payload && payload.leadId ? payload.leadId : undefined
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.TEAMS.UPDATE, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(String(payload && payload.teamId ? payload.teamId : ""))}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload && payload.changes ? payload.changes : {})
+  });
+});
+
+ipcMain.handle(CHANNELS.TEAMS.DELETE, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(String(payload && payload.teamId ? payload.teamId : ""))}`, {
+    method: "DELETE"
+  });
+});
+
+ipcMain.handle(CHANNELS.TEAMS.ADD_MEMBER, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(String(payload && payload.teamId ? payload.teamId : ""))}/members`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      memberId: payload && payload.userId ? payload.userId : "",
+      role: payload && payload.role ? payload.role : "developer"
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.TEAMS.REMOVE_MEMBER, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(String(payload && payload.teamId ? payload.teamId : ""))}/members/${encodeURIComponent(String(payload && payload.userId ? payload.userId : ""))}`, {
+    method: "DELETE"
+  });
+});
+
+ipcMain.handle(CHANNELS.TEAMS.GET_ME, async () => {
+  return await fetchFromBackend("/api/auth/me");
+});
+
+ipcMain.handle(CHANNELS.TEAMS.GET_ORG_MEMBERS, async () => {
+  return await fetchFromBackend("/api/org/members?page=1&limit=200");
+});
+
+ipcMain.handle(CHANNELS.TEAMS.GET_MEMBERS, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(String(payload && payload.teamId ? payload.teamId : ""))}/members`);
+});
+
+ipcMain.handle(CHANNELS.TEAMS.GET_JOIN_REQUESTS, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(String(payload && payload.teamId ? payload.teamId : ""))}/join-requests`);
+});
+
+ipcMain.handle(CHANNELS.TEAMS.CREATE_JOIN_REQUEST, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(String(payload && payload.teamId ? payload.teamId : ""))}/join-requests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note: payload && payload.note ? payload.note : undefined })
+  });
+});
+
+ipcMain.handle(CHANNELS.TEAMS.REVIEW_JOIN_REQUEST, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/join-requests/${encodeURIComponent(String(payload && payload.requestId ? payload.requestId : ""))}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: payload && payload.status ? payload.status : "rejected" })
+  });
+});
+
+ipcMain.handle(CHANNELS.TEAMS.GET_SCORES, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(String(payload && payload.teamId ? payload.teamId : ""))}/scores`);
+});
+
+ipcMain.handle(CHANNELS.TEAMS.UPDATE_SCORE, async (event, payload) => {
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(String(payload && payload.teamId ? payload.teamId : ""))}/scores/${encodeURIComponent(String(payload && payload.memberId ? payload.memberId : ""))}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      score: payload && typeof payload.score === "number" ? payload.score : 0,
+      metric: payload && payload.metric ? payload.metric : "performance"
+    })
+  });
+});
+
+// Skill Gap Handlers
+ipcMain.handle(CHANNELS.SKILL_GAP.GET_MATRIX, async () => {
+  return await fetchFromBackend("/api/skill-gap/matrix");
+});
+
+ipcMain.handle(CHANNELS.SKILL_GAP.UPDATE_SKILL_LEVEL, async (event, payload) => {
+  return await fetchFromBackend("/api/skill-gap/skill-level", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      memberId: payload && payload.memberId ? payload.memberId : "",
+      skillId: payload && payload.skillId ? payload.skillId : "",
+      level: payload && typeof payload.level === "number" ? payload.level : 0
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.SKILL_GAP.GET_REQUIRED_SKILLS, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  const query = sprintId ? `?sprintId=${encodeURIComponent(sprintId)}` : "";
+  return await fetchFromBackend(`/api/skill-gap/required-skills${query}`);
+});
+
+ipcMain.handle(CHANNELS.SKILL_GAP.ASSIGN_TRAINING, async (event, payload) => {
+  return await fetchFromBackend("/api/skill-gap/assign-training", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      memberId: payload && payload.memberId ? payload.memberId : "",
+      skillId: payload && payload.skillId ? payload.skillId : "",
+      resourceUrl: payload && payload.resourceUrl ? payload.resourceUrl : ""
+    })
+  });
+});
+
+// Sprint Handlers
+ipcMain.handle(CHANNELS.SPRINT.GET_BY_ID, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}`);
+});
+
+ipcMain.handle(CHANNELS.SPRINT.GET_CURRENT, async () => {
+  const currentResp = await fetchFromBackend("/api/sprints/current");
+  if (currentResp && currentResp.ok && currentResp.data && currentResp.data.ok) {
+    return currentResp;
+  }
+
+  const activeResp = await fetchFromBackend("/api/sprints?status=active");
+  if (!(activeResp && activeResp.ok && activeResp.data && activeResp.data.ok)) {
+    return currentResp;
+  }
+
+  const payload = activeResp.data && activeResp.data.data ? activeResp.data.data : null;
+  const items = payload && Array.isArray(payload.items) ? payload.items : [];
+  return IPCResponse.success({
+    ok: true,
+    status: 200,
+    data: items.length ? items[0] : null
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINT.GET_TASKS, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/tasks`);
+});
+
+ipcMain.handle(CHANNELS.SPRINT.UPDATE, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  const changes = payload && payload.changes && typeof payload.changes === "object" ? payload.changes : {};
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes)
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINT.UPDATE_STATUS, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  const status = payload && payload.status ? String(payload.status) : "";
+
+  if (status === "active" || status === "started") {
+    return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/start`, { method: "PATCH" });
+  }
+  if (status === "completed" || status === "complete") {
+    return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/complete`, { method: "PATCH" });
+  }
+  if (status === "cancelled" || status === "canceled") {
+    return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/cancel`, { method: "PATCH" });
+  }
+
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status })
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINT.GET_EVENTS, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/events`);
+});
+
 app.whenReady().then(() => {
   createWindow();
 

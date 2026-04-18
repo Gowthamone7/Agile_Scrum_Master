@@ -18,6 +18,13 @@ type Sprint = {
 
 type SprintGetResp = { sprint?: Sprint; error?: string } | (Sprint & { error?: never });
 
+type Task = {
+  id: string;
+  status?: string;
+  title?: string;
+  points?: number;
+};
+
 type Velocity = {
   currentVelocity: number;
   requiredVelocity: number;
@@ -31,6 +38,26 @@ type AlertsResp = { items: Array<{ id: string; severity: string; title: string; 
 type Risk = Record<string, unknown>;
 
 type BurndownPoint = { day: number; date: string; idealRemaining: number; actualRemaining: number };
+
+type DesktopEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
 
 function safe(value: unknown): string {
   if (typeof value === "string") return value;
@@ -58,25 +85,53 @@ function normalizeSprint(data: SprintGetResp | null): Sprint | null {
   return null;
 }
 
-function extractError(data: SprintGetResp | null): string | null {
+function extractError(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   if ("error" in data) {
     const err = (data as { error?: unknown }).error;
-    return typeof err === "string" && err ? err : null;
+    if (typeof err === "string" && err) return err;
+    if (err && typeof err === "object" && "message" in err) {
+      const msg = (err as { message?: unknown }).message;
+      return typeof msg === "string" && msg ? msg : null;
+    }
+    return null;
   }
   return null;
 }
 
-async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null; text?: string }> {
-  const resp = await fetch(url, { cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
   }
-  return { ok: resp.ok, status: resp.status, data, text };
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopEnvelope<unknown>;
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const wrapped = raw.data;
+  if (wrapped && typeof wrapped === "object" && "ok" in (wrapped as Record<string, unknown>) && "status" in (wrapped as Record<string, unknown>)) {
+    const normalized = wrapped as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return { ok: true, status: 200, data: (raw.data as T) ?? null };
 }
 
 export default function SprintDetailPage() {
@@ -99,12 +154,9 @@ export default function SprintDetailPage() {
     setLoading(true);
     setError(null);
 
-    const [sResp, vResp, aResp, rResp, bResp] = await Promise.all([
-      fetchJson<SprintGetResp>(`/api/sprints/${encodeURIComponent(sprintId)}`),
-      fetchJson<Velocity>(`/api/monitoring/sprint/${encodeURIComponent(sprintId)}/velocity`),
-      fetchJson<AlertsResp>(`/api/monitoring/sprint/${encodeURIComponent(sprintId)}/alerts?acknowledged=false`),
-      fetchJson<Risk>(`/api/sprints/${encodeURIComponent(sprintId)}/risk`),
-      fetchJson<{ items: BurndownPoint[] }>(`/api/sprints/${encodeURIComponent(sprintId)}/burndown`),
+    const [sResp, tResp] = await Promise.all([
+      invokeDesktop<SprintGetResp>("sprint:getById", { sprintId }),
+      invokeDesktop<Task[]>("sprint:getTasks", { sprintId }),
     ]);
 
     if (!sResp.ok) {
@@ -114,12 +166,69 @@ export default function SprintDetailPage() {
       return;
     }
 
-    setSprint(normalizeSprint(sResp.data));
+    const nextSprint = normalizeSprint(sResp.data);
+    setSprint(nextSprint);
 
-    setVelocity(vResp.ok ? vResp.data : null);
-    setAlerts(aResp.ok ? aResp.data : null);
-    setRisk(rResp.ok ? rResp.data : null);
-    setBurndown(bResp.ok && Array.isArray(bResp.data?.items) ? bResp.data!.items : []);
+    const tasks = tResp.ok && Array.isArray(tResp.data) ? tResp.data : [];
+    const totalTasks = tasks.length;
+    const completedTasks = tasks.filter((task) => {
+      const s = String(task.status || "").toLowerCase();
+      return s === "done" || s === "completed" || s === "closed";
+    }).length;
+    const blockedTasks = tasks.filter((task) => String(task.status || "").toLowerCase() === "blocked").length;
+
+    const now = Date.now();
+    const endMs = nextSprint?.endDate ? new Date(nextSprint.endDate).getTime() : Number.NaN;
+    const daysRemaining = Number.isFinite(endMs) ? Math.max(0, Math.ceil((endMs - now) / 86_400_000)) : 0;
+    const plannedPoints = Number(nextSprint?.plannedPoints ?? totalTasks);
+    const completedPoints = Number(nextSprint?.completedPoints ?? completedTasks);
+
+    const currentVelocity = Math.max(0, completedTasks);
+    const requiredVelocity = daysRemaining > 0 ? Math.max(0, (plannedPoints - completedPoints) / daysRemaining) : 0;
+    const onTrack = completedPoints >= Math.floor(plannedPoints * 0.5) || requiredVelocity <= Math.max(1, currentVelocity);
+
+    setVelocity({
+      currentVelocity,
+      requiredVelocity,
+      gapPct: plannedPoints > 0 ? ((plannedPoints - completedPoints) / plannedPoints) * 100 : 0,
+      onTrack,
+      daysRemaining,
+    });
+
+    const alertItems: AlertsResp["items"] = [];
+    if (blockedTasks > 0) {
+      alertItems.push({
+        id: "blocked-tasks",
+        severity: "high",
+        title: "Blocked tasks detected",
+        message: `${blockedTasks} task(s) are currently blocked in this sprint.",
+        createdAt: new Date().toISOString(),
+        acknowledged: false,
+      });
+    }
+    if (!onTrack) {
+      alertItems.push({
+        id: "velocity-risk",
+        severity: "medium",
+        title: "Velocity risk",
+        message: "Current progress is behind the projected sprint completion pace.",
+        createdAt: new Date().toISOString(),
+        acknowledged: false,
+      });
+    }
+    setAlerts({ items: alertItems });
+
+    setRisk({
+      totalTasks,
+      completedTasks,
+      blockedTasks,
+      daysRemaining,
+      plannedPoints,
+      completedPoints,
+      status: nextSprint?.status || "unknown",
+    });
+
+    setBurndown([]);
 
     setLoading(false);
   }
@@ -131,13 +240,13 @@ export default function SprintDetailPage() {
 
   async function startSprint() {
     if (!hasId) return;
-    await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/start`, { method: "PATCH" });
+    await invokeDesktop<Sprint>("sprint:update", { sprintId, changes: { status: "active" } });
     await load();
   }
 
   async function completeSprint() {
     if (!hasId) return;
-    await fetch(`/api/sprints/${encodeURIComponent(sprintId)}/complete`, { method: "PATCH" });
+    await invokeDesktop<Sprint>("sprint:update", { sprintId, changes: { status: "completed" } });
     await load();
   }
 
