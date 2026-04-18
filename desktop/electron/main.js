@@ -731,6 +731,116 @@ ipcMain.handle(CHANNELS.SPRINT_PLAN.DELETE_SPRINT, async (event, payload) => {
   });
 });
 
+// Standup Handlers
+ipcMain.handle(CHANNELS.STANDUP.GET_TODAY, async () => {
+  return await fetchFromBackend("/api/standup/today");
+});
+
+ipcMain.handle(CHANNELS.STANDUP.SUBMIT, async (event, payload) => {
+  return await fetchFromBackend("/api/standup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: payload && payload.userId ? payload.userId : "",
+      yesterday: payload && payload.yesterday ? payload.yesterday : "",
+      today: payload && payload.today ? payload.today : "",
+      blockers: payload && payload.blockers ? payload.blockers : ""
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.STANDUP.GET_HISTORY, async (event, payload) => {
+  const query = new URLSearchParams();
+  if (payload && payload.date) {
+    query.set("date", String(payload.date));
+  }
+  const qs = query.toString();
+  return await fetchFromBackend(`/api/standup/history${qs ? `?${qs}` : ""}`);
+});
+
+ipcMain.handle(CHANNELS.STANDUP.GENERATE_SUMMARY, async (event, payload) => {
+  return await fetchFromBackend("/api/standup/summary", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      date: payload && payload.date ? payload.date : undefined
+    })
+  });
+});
+
+// Tasks Handlers
+ipcMain.handle(CHANNELS.TASKS.GET_ALL, async (event, payload) => {
+  const filters = payload && payload.filters && typeof payload.filters === "object" ? payload.filters : {};
+  const query = new URLSearchParams();
+
+  if (filters && filters.projectId) query.set("projectId", String(filters.projectId));
+  if (filters && filters.sprintId) query.set("sprintId", String(filters.sprintId));
+  if (filters && filters.assigneeId) query.set("assigneeId", String(filters.assigneeId));
+  if (filters && filters.assignee) query.set("assignee", String(filters.assignee));
+  if (filters && filters.status) query.set("status", String(filters.status));
+  if (filters && filters.priority) query.set("priority", String(filters.priority));
+  if (filters && filters.label) query.set("label", String(filters.label));
+  if (filters && filters.query) query.set("q", String(filters.query));
+  if (filters && filters.riskOnly) query.set("riskOnly", "true");
+
+  const qs = query.toString();
+  return await fetchFromBackend(`/api/tasks${qs ? `?${qs}` : ""}`);
+});
+
+ipcMain.handle(CHANNELS.TASKS.CREATE, async (event, payload) => {
+  return await fetchFromBackend("/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: payload && payload.title ? payload.title : "",
+      description: payload && payload.description ? payload.description : undefined,
+      projectId: payload && payload.projectId ? payload.projectId : "",
+      sprintId: payload && payload.sprintId ? payload.sprintId : undefined,
+      assigneeId: payload && payload.assigneeId ? payload.assigneeId : undefined,
+      priority: payload && payload.priority ? payload.priority : "medium",
+      storyPoints: payload && typeof payload.points === "number" ? payload.points : 0,
+      labels: payload && Array.isArray(payload.labels) ? payload.labels : []
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.TASKS.BULK_UPDATE, async (event, payload) => {
+  return await fetchFromBackend("/api/tasks/bulk-update", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ids: payload && Array.isArray(payload.ids) ? payload.ids : [],
+      changes: payload && payload.changes && typeof payload.changes === "object" ? payload.changes : {}
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.TASKS.BULK_DELETE, async (event, payload) => {
+  return await fetchFromBackend("/api/tasks/bulk-delete", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ids: payload && Array.isArray(payload.ids) ? payload.ids : []
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.TASKS.GET_BY_ID, async (event, payload) => {
+  const taskId = payload && payload.taskId ? String(payload.taskId) : "";
+  return await fetchFromBackend(`/api/tasks/${encodeURIComponent(taskId)}`);
+});
+
+ipcMain.handle(CHANNELS.TASKS.ADD_SUBTASK, async (event, payload) => {
+  const taskId = payload && payload.taskId ? String(payload.taskId) : "";
+  return await fetchFromBackend(`/api/tasks/${encodeURIComponent(taskId)}/subtasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: payload && payload.title ? payload.title : ""
+    })
+  });
+});
+
 app.whenReady().then(() => {
   createWindow();
 

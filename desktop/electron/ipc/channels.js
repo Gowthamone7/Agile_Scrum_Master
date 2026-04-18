@@ -185,6 +185,24 @@ const CHANNELS = {
     DELETE_SPRINT: "sprintPlan:deleteSprint"
   },
 
+  // Daily standup
+  STANDUP: {
+    GET_TODAY: "standup:getToday",
+    SUBMIT: "standup:submit",
+    GET_HISTORY: "standup:getHistory",
+    GENERATE_SUMMARY: "standup:generateSummary"
+  },
+
+  // Tasks
+  TASKS: {
+    GET_ALL: "tasks:getAll",
+    CREATE: "tasks:create",
+    BULK_UPDATE: "tasks:bulkUpdate",
+    BULK_DELETE: "tasks:bulkDelete",
+    GET_BY_ID: "tasks:getById",
+    ADD_SUBTASK: "tasks:addSubtask"
+  },
+
   // Events (one-way from main to renderer)
   EVENTS: {
     UPDATE_STATUS: "updates:status",

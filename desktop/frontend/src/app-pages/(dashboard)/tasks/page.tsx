@@ -6,6 +6,130 @@ import Link from "@/next-shims/link";
 import { TaskDetailDrawer, type DrawerSubtask, type DrawerTaskDetail } from "@/components/TaskDetailDrawer";
 import { BlockLoadingOverlay } from "@/components/block-loading-overlay";
 
+type DesktopInvokeEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
+type TasksListItem = {
+  id: string;
+  title?: string;
+  description?: string;
+  status?: string;
+  priority?: string;
+  storyPoints?: number;
+  points?: number;
+  techTags?: string[];
+  taskKey?: string;
+  aiRiskScore?: number;
+  sprintId?: string;
+  assignee?: { id: string; name?: string; avatar?: string } | null;
+  subtasks?: Array<{ id: string; status?: string }>;
+};
+
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
+  }
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopInvokeEnvelope<unknown>;
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const envelope = raw.data;
+  if (envelope && typeof envelope === "object" && "ok" in (envelope as Record<string, unknown>) && "status" in (envelope as Record<string, unknown>)) {
+    const normalized = envelope as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: (raw.data as T) ?? null,
+  };
+}
+
+function normalizeStatus(status: unknown): keyof Board {
+  const value = String(status || "todo").toLowerCase();
+  if (value === "todo") return "todo";
+  if (value === "in_progress" || value === "in-progress" || value === "inprogress") return "in_progress";
+  if (value === "in_review" || value === "in-review" || value === "inreview") return "in_review";
+  if (value === "blocked") return "blocked";
+  if (value === "done" || value === "completed" || value === "closed") return "done";
+  return "todo";
+}
+
+function toBoardTask(item: TasksListItem): BoardTask {
+  const subtasks = Array.isArray(item.subtasks) ? item.subtasks : [];
+  const doneCount = subtasks.filter((s) => String(s.status || "").toLowerCase() === "done").length;
+
+  return {
+    id: String(item.id || ""),
+    title: String(item.title || "Untitled task"),
+    storyPoints: Number(item.storyPoints ?? item.points ?? 0),
+    priority: String(item.priority || "medium"),
+    techTags: Array.isArray(item.techTags) ? item.techTags : [],
+    aiRiskScore: typeof item.aiRiskScore === "number" ? item.aiRiskScore : undefined,
+    status: normalizeStatus(item.status),
+    taskKey: String(item.taskKey || ""),
+    description: String(item.description || ""),
+    subtaskProgress: subtasks.length ? { done: doneCount, total: subtasks.length } : undefined,
+    assignee: item.assignee
+      ? {
+          id: String(item.assignee.id || ""),
+          name: String(item.assignee.name || ""),
+          avatar: String(item.assignee.avatar || ""),
+        }
+      : null,
+  };
+}
+
+function emptyBoard(): Board {
+  return { todo: [], in_progress: [], in_review: [], blocked: [], done: [] };
+}
+
+function buildBoard(items: TasksListItem[]): Board {
+  const next = emptyBoard();
+  items.forEach((item) => {
+    const mapped = toBoardTask(item);
+    const key = normalizeStatus(mapped.status);
+    next[key].push(mapped);
+  });
+  return next;
+}
+
 type SprintListItem = {
   id: string;
   projectId: string;
@@ -184,15 +308,15 @@ export default function TaskBoardPage() {
     setNewTaskDescription("");
     setNewTaskStoryPoints("");
     try {
-      const respActive = await fetch(`/api/sprints?${new URLSearchParams({ status: "active" }).toString()}`, { cache: "no-store" });
-      const dataActive = await respActive.json().catch(() => null);
-      if (!respActive.ok) throw new Error(String(dataActive?.error || "Failed to load sprints"));
+      const respActive = await invokeDesktop<{ items?: SprintListItem[]; error?: string }>("sprints:getAll", { status: "active" });
+      if (!respActive.ok) throw new Error(String((respActive.data as { error?: string } | null)?.error || `Failed to load sprints (${respActive.status})`));
 
-      let items = Array.isArray(dataActive?.items) ? (dataActive.items as SprintListItem[]) : [];
+      let items = Array.isArray(respActive.data?.items) ? (respActive.data.items as SprintListItem[]) : [];
       if (!items.length) {
-        const respPlanning = await fetch(`/api/sprints?${new URLSearchParams({ status: "planning" }).toString()}`, { cache: "no-store" });
-        const dataPlanning = await respPlanning.json().catch(() => null);
-        if (respPlanning.ok) items = Array.isArray(dataPlanning?.items) ? (dataPlanning.items as SprintListItem[]) : [];
+        const respPlanning = await invokeDesktop<{ items?: SprintListItem[]; error?: string }>("sprints:getAll", { status: "planning" });
+        if (respPlanning.ok) {
+          items = Array.isArray(respPlanning.data?.items) ? (respPlanning.data.items as SprintListItem[]) : [];
+        }
       }
 
       setSprints(items);
@@ -214,23 +338,52 @@ export default function TaskBoardPage() {
     setNewTaskDescription("");
     setNewTaskStoryPoints("");
     try {
-      const resp = await fetch(`/api/tasks/board/${encodeURIComponent(sprintId)}`, { cache: "no-store" });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to load board"));
-      setBoard({
-        todo: Array.isArray(data?.todo) ? (data.todo as BoardTask[]) : [],
-        in_progress: Array.isArray(data?.in_progress) ? (data.in_progress as BoardTask[]) : [],
-        in_review: Array.isArray(data?.in_review) ? (data.in_review as BoardTask[]) : [],
-        blocked: Array.isArray(data?.blocked) ? (data.blocked as BoardTask[]) : [],
-        done: Array.isArray(data?.done) ? (data.done as BoardTask[]) : [],
+      const resp = await invokeDesktop<TasksListItem[] | { items?: TasksListItem[]; error?: string }>("tasks:getAll", {
+        filters: {
+          sprintId,
+          query,
+          priority: priorityFilter === "all" ? undefined : priorityFilter,
+          assignee: assigneeFilter === "all" ? undefined : assigneeFilter,
+          riskOnly: riskOnly || undefined,
+        },
       });
+      if (!resp.ok) throw new Error(String((resp.data as { error?: string } | null)?.error || "Failed to load board"));
+
+      const taskItems = Array.isArray(resp.data)
+        ? (resp.data as TasksListItem[])
+        : Array.isArray((resp.data as { items?: TasksListItem[] } | null)?.items)
+          ? ((resp.data as { items: TasksListItem[] }).items as TasksListItem[])
+          : [];
+
+      setBoard(buildBoard(taskItems));
     } catch (e) {
-      setBoard({ todo: [], in_progress: [], in_review: [], blocked: [], done: [] });
+      setBoard(emptyBoard());
       setError(e instanceof Error ? e.message : "Failed to load board");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [assigneeFilter, priorityFilter, query, riskOnly]);
+
+  async function bulkUpdateTasks(ids: string[], changes: Record<string, unknown>) {
+    const resp = await invokeDesktop<TasksListItem[] | { items?: TasksListItem[]; error?: string }>("tasks:bulkUpdate", {
+      ids,
+      changes,
+    });
+    if (!resp.ok) {
+      const maybeError = (resp.data as { error?: string } | null)?.error;
+      throw new Error(String(maybeError || "Task update failed"));
+    }
+    return resp;
+  }
+
+  async function bulkDeleteTasks(ids: string[]) {
+    const resp = await invokeDesktop<{ success?: boolean; error?: string }>("tasks:bulkDelete", { ids });
+    if (!resp.ok) {
+      const maybeError = (resp.data as { error?: string } | null)?.error;
+      throw new Error(String(maybeError || "Task delete failed"));
+    }
+    return resp;
+  }
 
   async function createTask() {
     if (!selectedSprintId) return;
@@ -241,21 +394,18 @@ export default function TaskBoardPage() {
       const projectId = sprint?.projectId;
       if (!projectId) throw new Error("Missing projectId for selected sprint");
 
-      const storyPoints = newTaskStoryPoints === "" ? 0 : Number(newTaskStoryPoints);
-      const resp = await fetch("/api/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId,
-          sprintId: selectedSprintId,
-          title: newTaskTitle,
-          description: newTaskDescription || undefined,
-          storyPoints,
-        }),
-        cache: "no-store",
+      const points = newTaskStoryPoints === "" ? 0 : Number(newTaskStoryPoints);
+      const resp = await invokeDesktop<{ id?: string; error?: string }>("tasks:create", {
+        title: newTaskTitle,
+        description: newTaskDescription || undefined,
+        projectId,
+        sprintId: selectedSprintId,
+        assigneeId: undefined,
+        priority: "medium",
+        points,
+        labels: [],
       });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to create task"));
+      if (!resp.ok) throw new Error(String((resp.data as { error?: string } | null)?.error || "Failed to create task"));
 
       await loadBoard(selectedSprintId);
       setShowCreateTask(false);
@@ -273,14 +423,7 @@ export default function TaskBoardPage() {
     setError(null);
     setUpdatingTaskId(taskId);
     try {
-      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-        cache: "no-store",
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Status update failed"));
+      await bulkUpdateTasks([String(taskId)], { status });
       if (selectedSprintId) await loadBoard(selectedSprintId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Status update failed");
@@ -294,12 +437,7 @@ export default function TaskBoardPage() {
     setError(null);
     setUpdatingTaskId(taskId);
     try {
-      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, {
-        method: "DELETE",
-        cache: "no-store",
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to archive task"));
+      await bulkUpdateTasks([String(taskId)], { status: "archived" });
       if (selectedSprintId) await loadBoard(selectedSprintId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to archive task");
@@ -313,12 +451,7 @@ export default function TaskBoardPage() {
     setError(null);
     setUpdatingTaskId(taskId);
     try {
-      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}?hard=true`, {
-        method: "DELETE",
-        cache: "no-store",
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to delete task"));
+      await bulkDeleteTasks([String(taskId)]);
       if (selectedSprintId) await loadBoard(selectedSprintId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to delete task");
@@ -362,11 +495,12 @@ export default function TaskBoardPage() {
     setNewSubtaskTitle("");
 
     try {
-      const resp = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`, { cache: "no-store" });
-      const data = (await resp.json().catch(() => null)) as { task?: Record<string, unknown>; error?: string } | null;
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to load task details"));
+      const resp = await invokeDesktop<{ task?: Record<string, unknown>; error?: string }>("tasks:getById", {
+        taskId,
+      });
+      if (!resp.ok) throw new Error(String((resp.data as { error?: string } | null)?.error || "Failed to load task details"));
 
-      const taskRaw = data?.task || {};
+      const taskRaw = (resp.data as { task?: Record<string, unknown> } | null)?.task || {};
       const subtaskRaw = Array.isArray(taskRaw.subtasks) ? (taskRaw.subtasks as Record<string, unknown>[]) : [];
       setDrawerTask({
         id: String(taskRaw.id || taskId),
@@ -396,17 +530,7 @@ export default function TaskBoardPage() {
       };
     });
 
-    const resp = await fetch(`/api/tasks/${encodeURIComponent(subtaskId)}/status`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: nextStatus }),
-      cache: "no-store",
-    });
-
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => null);
-      throw new Error(String(data?.error || "Failed to update subtask status"));
-    }
+    await bulkUpdateTasks([String(subtaskId)], { status: nextStatus });
 
     if (selectedSprintId) await loadBoard(selectedSprintId);
   }
@@ -415,14 +539,11 @@ export default function TaskBoardPage() {
     if (!drawerTask || !newSubtaskTitle.trim()) return;
     setAddingSubtask(true);
     try {
-      const resp = await fetch(`/api/tasks/${encodeURIComponent(drawerTask.id)}/subtasks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newSubtaskTitle.trim() }),
-        cache: "no-store",
+      const resp = await invokeDesktop<{ item?: Record<string, unknown>; error?: string }>("tasks:addSubtask", {
+        taskId: drawerTask.id,
+        title: newSubtaskTitle.trim(),
       });
-
-      const data = (await resp.json().catch(() => null)) as { item?: Record<string, unknown>; error?: string } | null;
+      const data = resp.data as { item?: Record<string, unknown>; error?: string } | null;
       if (!resp.ok || !data?.item) throw new Error(String(data?.error || "Failed to create subtask"));
 
       setDrawerTask((prev) => {
