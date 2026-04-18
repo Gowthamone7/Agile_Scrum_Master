@@ -10,6 +10,22 @@ type TaskResp = { task?: Task; error?: string } | (Task & { error?: never });
 
 type CommentsResp = { items: TaskComment[] };
 
+type DesktopInvokeEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
 function safe(value: unknown): string {
   if (typeof value === "string") return value;
   if (value == null) return "";
@@ -58,16 +74,47 @@ function extractError(data: TaskResp | null): string | null {
   return null;
 }
 
-async function fetchJson<T>(url: string): Promise<{ ok: boolean; status: number; data: T | null; text?: string }> {
-  const resp = await fetch(url, { cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
   }
-  return { ok: resp.ok, status: resp.status, data, text };
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopInvokeEnvelope<unknown>;
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const envelope = raw.data;
+  if (envelope && typeof envelope === "object" && "ok" in (envelope as Record<string, unknown>) && "status" in (envelope as Record<string, unknown>)) {
+    const normalized = envelope as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: (raw.data as T) ?? null,
+  };
 }
 
 export default function TaskDetailPage() {
@@ -108,10 +155,7 @@ export default function TaskDetailPage() {
       setLoading(true);
       setError(null);
 
-      const [tResp, cResp] = await Promise.all([
-        fetchJson<TaskResp>(`/api/tasks/${encodeURIComponent(taskId)}`),
-        fetchJson<CommentsResp>(`/api/tasks/${encodeURIComponent(taskId)}/comments`),
-      ]);
+      const tResp = await invokeDesktop<TaskResp>("tasks:getById", { taskId });
 
       if (!tResp.ok) {
         setTask(null);
@@ -121,8 +165,13 @@ export default function TaskDetailPage() {
         return;
       }
 
-      setTask(normalizeTask(tResp.data));
-      setComments(cResp.ok ? cResp.data : null);
+      const nextTask = normalizeTask(tResp.data);
+      setTask(nextTask);
+
+      const rawComments = nextTask && typeof nextTask === "object" && Array.isArray((nextTask as Record<string, unknown>).comments)
+        ? ((nextTask as Record<string, unknown>).comments as TaskComment[])
+        : [];
+      setComments({ items: rawComments });
       setLoading(false);
     })();
   }, [hasId, taskId]);

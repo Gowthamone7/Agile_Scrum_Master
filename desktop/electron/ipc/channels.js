@@ -126,6 +126,7 @@ const CHANNELS = {
   // Team management
   TEAMS: {
     GET_ALL: "teams:getAll",
+    GET_DETAIL: "teams:getDetail",
     CREATE: "teams:create",
     UPDATE: "teams:update",
     DELETE: "teams:delete",
@@ -200,7 +201,24 @@ const CHANNELS = {
     BULK_UPDATE: "tasks:bulkUpdate",
     BULK_DELETE: "tasks:bulkDelete",
     GET_BY_ID: "tasks:getById",
+    UPDATE: "tasks:update",
+    DELETE: "tasks:delete",
+    ADD_COMMENT: "tasks:addComment",
+    DELETE_COMMENT: "tasks:deleteComment",
+    ADD_ATTACHMENT: "tasks:addAttachment",
+    LINK_TASK: "tasks:linkTask",
     ADD_SUBTASK: "tasks:addSubtask"
+  },
+
+  // Webhooks
+  WEBHOOKS: {
+    GET_ALL: "webhooks:getAll",
+    CREATE: "webhooks:create",
+    UPDATE: "webhooks:update",
+    DELETE: "webhooks:delete",
+    TEST: "webhooks:test",
+    GET_DELIVERY_LOG: "webhooks:getDeliveryLog",
+    RETRY_DELIVERY: "webhooks:retryDelivery"
   },
 
   // Events (one-way from main to renderer)

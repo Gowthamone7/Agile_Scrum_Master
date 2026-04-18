@@ -368,6 +368,11 @@ ipcMain.handle(CHANNELS.TEAMS.GET_ALL, async () => {
   return await fetchFromBackend("/api/teams");
 });
 
+ipcMain.handle(CHANNELS.TEAMS.GET_DETAIL, async (event, payload) => {
+  const teamId = payload && payload.teamId ? String(payload.teamId) : "";
+  return await fetchFromBackend(`/api/teams/${encodeURIComponent(teamId)}/detail`);
+});
+
 ipcMain.handle(CHANNELS.TEAMS.CREATE, async (event, payload) => {
   return await fetchFromBackend("/api/teams", {
     method: "POST",
@@ -830,6 +835,64 @@ ipcMain.handle(CHANNELS.TASKS.GET_BY_ID, async (event, payload) => {
   return await fetchFromBackend(`/api/tasks/${encodeURIComponent(taskId)}`);
 });
 
+ipcMain.handle(CHANNELS.TASKS.UPDATE, async (event, payload) => {
+  const taskId = payload && payload.taskId ? String(payload.taskId) : "";
+  const changes = payload && payload.changes && typeof payload.changes === "object" ? payload.changes : {};
+  return await fetchFromBackend(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes)
+  });
+});
+
+ipcMain.handle(CHANNELS.TASKS.DELETE, async (event, payload) => {
+  const taskId = payload && payload.taskId ? String(payload.taskId) : "";
+  return await fetchFromBackend(`/api/tasks/${encodeURIComponent(taskId)}`, {
+    method: "DELETE"
+  });
+});
+
+ipcMain.handle(CHANNELS.TASKS.ADD_COMMENT, async (event, payload) => {
+  const taskId = payload && payload.taskId ? String(payload.taskId) : "";
+  return await fetchFromBackend(`/api/tasks/${encodeURIComponent(taskId)}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content: payload && payload.content ? payload.content : ""
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.TASKS.DELETE_COMMENT, async (event, payload) => {
+  const commentId = payload && payload.commentId ? String(payload.commentId) : "";
+  return await fetchFromBackend(`/api/tasks/comments/${encodeURIComponent(commentId)}`, {
+    method: "DELETE"
+  });
+});
+
+ipcMain.handle(CHANNELS.TASKS.ADD_ATTACHMENT, async (event, payload) => {
+  const taskId = payload && payload.taskId ? String(payload.taskId) : "";
+  return await fetchFromBackend(`/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filePath: payload && payload.filePath ? payload.filePath : ""
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.TASKS.LINK_TASK, async (event, payload) => {
+  const taskId = payload && payload.taskId ? String(payload.taskId) : "";
+  return await fetchFromBackend(`/api/tasks/${encodeURIComponent(taskId)}/links`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: payload && payload.targetId ? payload.targetId : "",
+      linkType: payload && payload.linkType ? payload.linkType : "related"
+    })
+  });
+});
+
 ipcMain.handle(CHANNELS.TASKS.ADD_SUBTASK, async (event, payload) => {
   const taskId = payload && payload.taskId ? String(payload.taskId) : "";
   return await fetchFromBackend(`/api/tasks/${encodeURIComponent(taskId)}/subtasks`, {
@@ -838,6 +901,59 @@ ipcMain.handle(CHANNELS.TASKS.ADD_SUBTASK, async (event, payload) => {
     body: JSON.stringify({
       title: payload && payload.title ? payload.title : ""
     })
+  });
+});
+
+// Webhooks Handlers
+ipcMain.handle(CHANNELS.WEBHOOKS.GET_ALL, async () => {
+  return await fetchFromBackend("/api/webhooks");
+});
+
+ipcMain.handle(CHANNELS.WEBHOOKS.CREATE, async (event, payload) => {
+  return await fetchFromBackend("/api/webhooks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url: payload && payload.url ? payload.url : "",
+      events: payload && Array.isArray(payload.events) ? payload.events : [],
+      secret: payload && payload.secret ? payload.secret : ""
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.WEBHOOKS.UPDATE, async (event, payload) => {
+  const webhookId = payload && payload.webhookId ? String(payload.webhookId) : "";
+  const changes = payload && payload.changes && typeof payload.changes === "object" ? payload.changes : {};
+  return await fetchFromBackend(`/api/webhooks/${encodeURIComponent(webhookId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes)
+  });
+});
+
+ipcMain.handle(CHANNELS.WEBHOOKS.DELETE, async (event, payload) => {
+  const webhookId = payload && payload.webhookId ? String(payload.webhookId) : "";
+  return await fetchFromBackend(`/api/webhooks/${encodeURIComponent(webhookId)}`, {
+    method: "DELETE"
+  });
+});
+
+ipcMain.handle(CHANNELS.WEBHOOKS.TEST, async (event, payload) => {
+  const webhookId = payload && payload.webhookId ? String(payload.webhookId) : "";
+  return await fetchFromBackend(`/api/webhooks/${encodeURIComponent(webhookId)}/test`, {
+    method: "POST"
+  });
+});
+
+ipcMain.handle(CHANNELS.WEBHOOKS.GET_DELIVERY_LOG, async (event, payload) => {
+  const webhookId = payload && payload.webhookId ? String(payload.webhookId) : "";
+  return await fetchFromBackend(`/api/webhooks/${encodeURIComponent(webhookId)}/deliveries`);
+});
+
+ipcMain.handle(CHANNELS.WEBHOOKS.RETRY_DELIVERY, async (event, payload) => {
+  const deliveryId = payload && payload.deliveryId ? String(payload.deliveryId) : "";
+  return await fetchFromBackend(`/api/webhooks/deliveries/${encodeURIComponent(deliveryId)}/retry`, {
+    method: "POST"
   });
 });
 

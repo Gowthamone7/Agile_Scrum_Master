@@ -22,6 +22,53 @@ type DlqResponse = {
   items: DlqItem[];
 };
 
+type Webhook = {
+  id?: string;
+  source?: string;
+  url?: string;
+};
+
+type Delivery = {
+  id?: string;
+  event_type?: string;
+  eventType?: string;
+  payload?: unknown;
+  requestBody?: unknown;
+  responseBody?: unknown;
+  success?: boolean;
+  responseCode?: number;
+  statusCode?: number;
+  processed?: boolean;
+  processedAt?: string | null;
+  lastTriggered?: string | null;
+  createdAt?: string;
+  created_at?: string;
+  retry_count?: number;
+  retryCount?: number;
+  max_retries?: number;
+  maxRetries?: number;
+  next_retry_at?: string | null;
+  nextRetryAt?: string | null;
+  error?: string | null;
+  processing_error?: string | null;
+};
+
+type DesktopEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
 function fmt(v: string | null | undefined): string {
   if (!v) return "-";
   const t = new Date(v).getTime();
@@ -55,16 +102,107 @@ function extractError(data: unknown): string {
   return detail ? `${err}: ${detail}` : err;
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; status: number; data: T | null }> {
-  const resp = await fetch(url, { ...(init || {}), cache: "no-store" });
-  const text = await resp.text().catch(() => "");
-  let data: T | null = null;
-  try {
-    data = text ? (JSON.parse(text) as T) : null;
-  } catch {
-    data = null;
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
   }
-  return { ok: resp.ok, status: resp.status, data };
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopEnvelope<unknown>;
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const envelope = raw.data;
+  if (envelope && typeof envelope === "object" && "ok" in (envelope as Record<string, unknown>) && "status" in (envelope as Record<string, unknown>)) {
+    const normalized = envelope as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: (raw.data as T) ?? null,
+  };
+}
+
+function asItemsArray<T>(data: unknown): T[] {
+  if (Array.isArray(data)) return data as T[];
+  if (data && typeof data === "object" && Array.isArray((data as { items?: unknown[] }).items)) {
+    return (data as { items: T[] }).items;
+  }
+  return [];
+}
+
+function toIsoDate(value: unknown): string {
+  const raw = typeof value === "string" ? value : "";
+  if (!raw) return new Date(0).toISOString();
+  const ts = new Date(raw).getTime();
+  if (!Number.isFinite(ts)) return new Date(0).toISOString();
+  return new Date(ts).toISOString();
+}
+
+function toDlqItem(webhook: Webhook, delivery: Delivery, fallbackIndex: number): DlqItem {
+  const processed = typeof delivery.processed === "boolean"
+    ? delivery.processed
+    : typeof delivery.success === "boolean"
+      ? delivery.success
+      : Number(delivery.responseCode ?? delivery.statusCode ?? 0) >= 200 && Number(delivery.responseCode ?? delivery.statusCode ?? 0) < 400;
+
+  const created = toIsoDate(delivery.created_at || delivery.createdAt || delivery.lastTriggered);
+  const processedAt = typeof delivery.processedAt === "string"
+    ? delivery.processedAt
+    : typeof delivery.lastTriggered === "string"
+      ? delivery.lastTriggered
+      : null;
+
+  return {
+    id: String(delivery.id || `${webhook.id || "webhook"}-${fallbackIndex}`),
+    source: String(webhook.source || webhook.url || "webhook"),
+    event_type: String(delivery.event_type || delivery.eventType || "unknown"),
+    payload: delivery.payload ?? delivery.requestBody ?? {},
+    processed,
+    processed_at: processedAt,
+    processing_error: String(delivery.processing_error || delivery.error || "") || null,
+    retry_count: Number(delivery.retry_count ?? delivery.retryCount ?? 0),
+    max_retries: Number(delivery.max_retries ?? delivery.maxRetries ?? 5),
+    next_retry_at: String(delivery.next_retry_at || delivery.nextRetryAt || "") || null,
+    dlq: !processed,
+    created_at: created,
+  };
+}
+
+function withinDateRange(createdAt: string, fromDate: string, toDate: string): boolean {
+  const ts = new Date(createdAt).getTime();
+  if (!Number.isFinite(ts)) return false;
+  if (fromDate) {
+    const fromTs = new Date(`${fromDate}T00:00:00`).getTime();
+    if (Number.isFinite(fromTs) && ts < fromTs) return false;
+  }
+  if (toDate) {
+    const toTs = new Date(`${toDate}T23:59:59`).getTime();
+    if (Number.isFinite(toTs) && ts > toTs) return false;
+  }
+  return true;
 }
 
 export function WebhookDLQPanel() {
@@ -91,23 +229,37 @@ export function WebhookDLQPanel() {
     setLoading(true);
     setError(null);
 
-    const q = new URLSearchParams();
-    q.set("limit", "200");
-    if (sourceFilter) q.set("source", sourceFilter);
-    if (eventTypeFilter) q.set("eventType", eventTypeFilter);
-    if (fromDate) q.set("from", `${fromDate} 00:00:00`);
-    if (toDate) q.set("to", `${toDate} 23:59:59`);
-
-    const resp = await fetchJson<DlqResponse>(`/api/admin/webhooks/dlq?${q.toString()}`);
-    setLoading(false);
-
-    if (!resp.ok) {
-      setError(extractError(resp.data));
+    const hooksResp = await invokeDesktop<Webhook[] | { items?: Webhook[]; error?: string }>("webhooks:getAll");
+    if (!hooksResp.ok) {
+      setLoading(false);
+      setError(extractError(hooksResp.data));
       return;
     }
 
-    setItems(Array.isArray(resp.data?.items) ? resp.data!.items : []);
-    setTotal(Number(resp.data?.total || 0));
+    const webhooks = asItemsArray<Webhook>(hooksResp.data);
+    const logs = await Promise.all(
+      webhooks.map(async (webhook) => {
+        const webhookId = String(webhook.id || "");
+        if (!webhookId) return [] as DlqItem[];
+        const logResp = await invokeDesktop<Delivery[] | { items?: Delivery[]; error?: string }>("webhooks:getDeliveryLog", { webhookId });
+        if (!logResp.ok) return [] as DlqItem[];
+        const deliveries = asItemsArray<Delivery>(logResp.data);
+        return deliveries.map((delivery, index) => toDlqItem(webhook, delivery, index));
+      })
+    );
+
+    const flattened = logs.flat();
+    const filtered = flattened
+      .filter((item) => item.dlq || Boolean(item.processing_error))
+      .filter((item) => (sourceFilter ? String(item.source || "").toLowerCase().includes(sourceFilter.toLowerCase()) : true))
+      .filter((item) => (eventTypeFilter ? String(item.event_type || "") === eventTypeFilter : true))
+      .filter((item) => withinDateRange(item.created_at, fromDate, toDate))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 200);
+
+    setItems(filtered);
+    setTotal(filtered.length);
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -127,7 +279,7 @@ export function WebhookDLQPanel() {
     setRetryingId(eventId);
     setError(null);
 
-    const resp = await fetchJson<unknown>(`/api/admin/webhooks/retry/${encodeURIComponent(eventId)}`, { method: "POST" });
+    const resp = await invokeDesktop<{ success?: boolean; error?: string }>("webhooks:retryDelivery", { deliveryId: eventId });
     setRetryingId(null);
 
     if (!resp.ok) {
@@ -142,11 +294,19 @@ export function WebhookDLQPanel() {
     setRetryingAll(true);
     setError(null);
 
-    const resp = await fetchJson<unknown>("/api/admin/webhooks/retry-all-dlq", { method: "POST" });
+    const targets = items.map((it) => String(it.id)).filter(Boolean);
+    const results = await Promise.allSettled(
+      targets.map((deliveryId) => invokeDesktop<{ success?: boolean; error?: string }>("webhooks:retryDelivery", { deliveryId }))
+    );
     setRetryingAll(false);
 
-    if (!resp.ok) {
-      setError(extractError(resp.data));
+    const failed = results.some((result) => {
+      if (result.status !== "fulfilled") return true;
+      return !result.value.ok;
+    });
+
+    if (failed) {
+      setError("Some retries failed");
       return;
     }
 

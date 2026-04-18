@@ -39,6 +39,13 @@ type ScoreItem = {
 
 type OrgMember = { id: string; fullName?: string; email?: string; role?: string };
 
+type TeamDetailResp = {
+  team?: Team;
+  members?: Array<Record<string, unknown>>;
+  currentTasks?: Array<Record<string, unknown>>;
+  velocity?: Array<Record<string, unknown>>;
+};
+
 type MeResponse = {
   user?: { id?: string; email?: string; fullName?: string };
   activeOrgId?: string | null;
@@ -79,6 +86,10 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: bool
     channel = "teams:getMe";
   } else if (method === "GET" && url === "/api/teams") {
     channel = "teams:getAll";
+  } else if (method === "GET" && /^\/api\/teams\/[^/]+\/detail$/.test(url)) {
+    const teamId = decodeURIComponent(url.split("/")[3] || "");
+    channel = "teams:getDetail";
+    payload = { teamId };
   } else if (method === "GET" && url === "/api/org/members?page=1&limit=200") {
     channel = "teams:getOrgMembers";
   } else if (method === "POST" && url === "/api/teams") {
@@ -165,6 +176,31 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: bool
 
 function roleCanAdmin(role: string | null | undefined) {
   return ["owner", "admin", "manager"].includes(String(role || "").toLowerCase());
+}
+
+function normalizeMember(raw: Record<string, unknown>): TeamMember {
+  const teamRoleRaw = String(raw.teamRole || raw.role || "developer").toLowerCase();
+  const teamRole: "admin" | "developer" = teamRoleRaw === "admin" ? "admin" : "developer";
+  return {
+    memberId: String(raw.memberId || raw.id || raw.userId || ""),
+    fullName: String(raw.fullName || raw.name || ""),
+    email: String(raw.email || ""),
+    orgRole: String(raw.orgRole || ""),
+    teamRole,
+    score: Number(raw.score ?? 0),
+  };
+}
+
+function normalizeVelocityScore(raw: Record<string, unknown>, index: number): ScoreItem {
+  const score = Number(raw.score ?? raw.velocity ?? raw.points ?? 0);
+  return {
+    rank: Number(raw.rank ?? index + 1),
+    memberId: String(raw.memberId || raw.userId || raw.id || ""),
+    fullName: String(raw.fullName || raw.name || ""),
+    email: String(raw.email || ""),
+    score,
+    metric: String(raw.metric || "velocity"),
+  };
 }
 
 export default function TeamsPage() {
@@ -273,15 +309,30 @@ export default function TeamsPage() {
       return;
     }
 
-    const [membersResp, requestsResp, scoresResp] = await Promise.all([
-      fetchJson<{ items?: TeamMember[] }>(`/api/teams/${encodeURIComponent(activeTeamId)}/members`),
+    const [detailResp, requestsResp, scoresResp] = await Promise.all([
+      fetchJson<TeamDetailResp>(`/api/teams/${encodeURIComponent(activeTeamId)}/detail`),
       fetchJson<{ items?: JoinRequest[] }>(`/api/teams/${encodeURIComponent(activeTeamId)}/join-requests`),
       fetchJson<{ items?: ScoreItem[] }>(`/api/teams/${encodeURIComponent(activeTeamId)}/scores`),
     ]);
 
-    if (membersResp.ok) setMembers(Array.isArray(membersResp.data?.items) ? membersResp.data.items : []);
+    if (detailResp.ok) {
+      const detailMembers = Array.isArray(detailResp.data?.members) ? detailResp.data.members : [];
+      setMembers(detailMembers.map((item) => normalizeMember(item as Record<string, unknown>)));
+
+      const detailTeam = detailResp.data?.team;
+      if (detailTeam && detailTeam.id) {
+        setTeams((prev) => prev.map((team) => (team.id === detailTeam.id ? { ...team, ...detailTeam } : team)));
+      }
+    }
+
     if (requestsResp.ok) setJoinRequests(Array.isArray(requestsResp.data?.items) ? requestsResp.data.items : []);
-    if (scoresResp.ok) setScores(Array.isArray(scoresResp.data?.items) ? scoresResp.data.items : []);
+
+    if (scoresResp.ok) {
+      setScores(Array.isArray(scoresResp.data?.items) ? scoresResp.data.items : []);
+    } else if (detailResp.ok && Array.isArray(detailResp.data?.velocity)) {
+      const fromVelocity = detailResp.data.velocity.map((item, index) => normalizeVelocityScore(item as Record<string, unknown>, index));
+      setScores(fromVelocity);
+    }
   }, [activeTeamId]);
 
   useEffect(() => {
