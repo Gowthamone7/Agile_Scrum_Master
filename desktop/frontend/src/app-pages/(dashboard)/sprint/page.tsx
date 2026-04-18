@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "@/next-shims/link";
+import { useSearchParams } from "@/next-shims/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { RefreshCw, Archive, Trash2 } from "lucide-react";
 
 type Sprint = {
   id: string;
   projectId?: string;
+  projectName?: string;
   name: string;
   status: string;
   goal?: string;
@@ -14,18 +16,13 @@ type Sprint = {
   endDate?: string;
   plannedPoints?: number;
   completedPoints?: number;
+  velocity?: number;
+  completionPct?: number;
 };
 
-type Task = {
-  id: string;
-  status?: string;
-  title?: string;
-};
-
-type SprintEvent = {
-  id: string;
-  type?: string;
-  date?: string;
+type SprintListResponse = {
+  items?: Sprint[];
+  error?: string;
 };
 
 type DesktopEnvelope<T> = {
@@ -80,13 +77,16 @@ async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<Des
 }
 
 export default function SprintListPage() {
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<string>("");
   const [items, setItems] = useState<Sprint[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionSprintId, setActionSprintId] = useState<string | null>(null);
-  const [, setTasks] = useState<Task[]>([]);
-  const [, setEvents] = useState<SprintEvent[]>([]);
+
+  const projectIdFilter = useMemo(() => searchParams.get("projectId") || "", [searchParams]);
+  const startDateFilter = useMemo(() => searchParams.get("startDate") || "", [searchParams]);
+  const endDateFilter = useMemo(() => searchParams.get("endDate") || "", [searchParams]);
 
   const tabs = useMemo(
     () => [
@@ -102,7 +102,12 @@ export default function SprintListPage() {
     setLoading(true);
     setError(null);
 
-    const resp = await invokeDesktop<Sprint | null>("sprint:getCurrent");
+    const resp = await invokeDesktop<Sprint[] | SprintListResponse>("sprints:getAll", {
+      projectId: projectIdFilter || undefined,
+      status: status || undefined,
+      startDate: startDateFilter || undefined,
+      endDate: endDateFilter || undefined,
+    });
 
     if (!resp.ok) {
       setItems([]);
@@ -111,26 +116,21 @@ export default function SprintListPage() {
       return;
     }
 
-    const current = resp.data;
-    if (!current) {
-      setItems([]);
-      setTasks([]);
-      setEvents([]);
-      setLoading(false);
-      return;
-    }
+    const payload = resp.data;
+    const list = Array.isArray(payload)
+      ? payload
+      : Array.isArray((payload as SprintListResponse | null)?.items)
+        ? (payload as SprintListResponse).items!
+        : [];
 
-    const normalizedStatus = String(current.status || "").toLowerCase();
-    const shouldShow = !status || normalizedStatus === String(status).toLowerCase();
-    setItems(shouldShow ? [current] : []);
+    const sorted = [...list].sort((a, b) => {
+      const aActive = String(a.status || "").toLowerCase() === "active" ? 0 : 1;
+      const bActive = String(b.status || "").toLowerCase() === "active" ? 0 : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      return String(b.startDate || "").localeCompare(String(a.startDate || ""));
+    });
 
-    const [taskResp, eventResp] = await Promise.all([
-      invokeDesktop<Task[]>("sprint:getTasks", { sprintId: current.id }),
-      invokeDesktop<SprintEvent[]>("sprint:getEvents", { sprintId: current.id }),
-    ]);
-
-    if (taskResp.ok) setTasks(Array.isArray(taskResp.data) ? taskResp.data : []);
-    if (eventResp.ok) setEvents(Array.isArray(eventResp.data) ? eventResp.data : []);
+    setItems(sorted);
 
     setLoading(false);
   }
@@ -138,7 +138,7 @@ export default function SprintListPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+  }, [status, projectIdFilter, startDateFilter, endDateFilter]);
 
   async function archiveSprint(sprintId: string) {
     if (!confirm("Archive this sprint?")) return;
@@ -220,7 +220,7 @@ export default function SprintListPage() {
                 key={s.id}
                 className="block rounded-lg border border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5 hover:shadow-md transition"
               >
-                <Link href={`/sprint/${encodeURIComponent(s.id)}`} className="block">
+                <Link href={`/sprints/${encodeURIComponent(s.id)}`} className="block">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-lg font-bold text-slate-900 dark:text-white">{s.name}</div>
                     <span className="rounded-full px-3 py-1 text-xs font-semibold bg-slate-100 dark:bg-zinc-800 text-slate-800 dark:text-slate-200">

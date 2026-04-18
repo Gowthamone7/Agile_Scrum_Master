@@ -159,6 +159,12 @@ const CHANNELS = {
     GET_EVENTS: "sprint:getEvents"
   },
 
+  // Sprints listing and creation
+  SPRINTS: {
+    GET_ALL: "sprints:getAll",
+    CREATE: "sprints:create"
+  },
+
   // Sprint planning
   SPRINT_PLAN: {
     GET_BACKLOG: "sprintPlan:getBacklog",

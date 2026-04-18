@@ -560,6 +560,40 @@ ipcMain.handle(CHANNELS.SPRINT.GET_EVENTS, async (event, payload) => {
   return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/events`);
 });
 
+// Sprints Handlers
+ipcMain.handle(CHANNELS.SPRINTS.GET_ALL, async (event, payload) => {
+  const query = new URLSearchParams();
+  if (payload && payload.projectId) {
+    query.set("projectId", String(payload.projectId));
+  }
+  if (payload && payload.status) {
+    query.set("status", String(payload.status));
+  }
+  if (payload && payload.startDate) {
+    query.set("startDate", String(payload.startDate));
+  }
+  if (payload && payload.endDate) {
+    query.set("endDate", String(payload.endDate));
+  }
+
+  const qs = query.toString();
+  return await fetchFromBackend(`/api/sprints${qs ? `?${qs}` : ""}`);
+});
+
+ipcMain.handle(CHANNELS.SPRINTS.CREATE, async (event, payload) => {
+  return await fetchFromBackend("/api/sprints", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload && payload.name ? payload.name : "",
+      goal: payload && payload.goal ? payload.goal : undefined,
+      startDate: payload && payload.startDate ? payload.startDate : "",
+      endDate: payload && payload.endDate ? payload.endDate : "",
+      projectId: payload && payload.projectId ? payload.projectId : ""
+    })
+  });
+});
+
 // Sprint Plan Handlers
 ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_BACKLOG, async (event, payload) => {
   const query = new URLSearchParams();

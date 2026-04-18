@@ -35,6 +35,65 @@ type NotificationsItem = {
 
 type ChangelogItem = { id: string; title: string; date: string; detail: string };
 
+type DesktopInvokeEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
+  }
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopInvokeEnvelope<unknown>;
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const envelope = raw.data;
+  if (envelope && typeof envelope === "object" && "ok" in (envelope as Record<string, unknown>) && "status" in (envelope as Record<string, unknown>)) {
+    const normalized = envelope as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: (raw.data as T) ?? null,
+  };
+}
+
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -295,16 +354,12 @@ export function Navbar() {
       }
 
       if (createTab === "sprint") {
-        const resp = await fetch("/api/sprints", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: sprintName,
-            goal: sprintGoal,
-            startDate: sprintStartDate,
-            endDate: sprintEndDate,
-            projectId: currentProjectId,
-          }),
+        const resp = await invokeDesktop<{ error?: string }>("sprints:create", {
+          name: sprintName,
+          goal: sprintGoal,
+          startDate: sprintStartDate,
+          endDate: sprintEndDate,
+          projectId: currentProjectId,
         });
         if (!resp.ok) throw new Error("Failed to create sprint");
         setToast({ text: "Sprint created", type: "success" });
