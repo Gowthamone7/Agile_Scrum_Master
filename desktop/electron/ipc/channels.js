@@ -159,6 +159,20 @@ const CHANNELS = {
     GET_EVENTS: "sprint:getEvents"
   },
 
+  // Sprint planning
+  SPRINT_PLAN: {
+    GET_BACKLOG: "sprintPlan:getBacklog",
+    GET_TEAM_CAPACITY: "sprintPlan:getTeamCapacity",
+    SAVE_PLAN: "sprintPlan:savePlan",
+    AI_SUGGEST: "sprintPlan:aiSuggest",
+    GET_PROJECTS: "sprintPlan:getProjects",
+    CREATE_PROJECT: "sprintPlan:createProject",
+    GET_PLANNING_SPRINTS: "sprintPlan:getPlanningSprints",
+    CREATE_SPRINT: "sprintPlan:createSprint",
+    ARCHIVE_SPRINT: "sprintPlan:archiveSprint",
+    DELETE_SPRINT: "sprintPlan:deleteSprint"
+  },
+
   // Events (one-way from main to renderer)
   EVENTS: {
     UPDATE_STATUS: "updates:status",

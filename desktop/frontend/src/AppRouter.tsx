@@ -38,6 +38,7 @@ function RouteDiscoveryFallback() {
 }
 
 export function AppRouter() {
+  // TODO: Add explicit redirect from /sprint_plan to /sprint-plan when legacy alias is fully deprecated.
   const pageEntries = useMemo(
     () =>
       Object.entries(pageModules)

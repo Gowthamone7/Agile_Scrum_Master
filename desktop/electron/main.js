@@ -560,6 +560,106 @@ ipcMain.handle(CHANNELS.SPRINT.GET_EVENTS, async (event, payload) => {
   return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/events`);
 });
 
+// Sprint Plan Handlers
+ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_BACKLOG, async (event, payload) => {
+  const query = new URLSearchParams();
+  if (payload && payload.projectId) {
+    query.set("projectId", String(payload.projectId));
+  }
+  const qs = query.toString();
+  return await fetchFromBackend(`/api/sprint-plan/backlog${qs ? `?${qs}` : ""}`);
+});
+
+ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_TEAM_CAPACITY, async (event, payload) => {
+  const query = new URLSearchParams();
+  if (payload && payload.startDate) {
+    query.set("startDate", String(payload.startDate));
+  }
+  if (payload && payload.endDate) {
+    query.set("endDate", String(payload.endDate));
+  }
+  const qs = query.toString();
+  return await fetchFromBackend(`/api/sprint-plan/team-capacity${qs ? `?${qs}` : ""}`);
+});
+
+ipcMain.handle(CHANNELS.SPRINT_PLAN.SAVE_PLAN, async (event, payload) => {
+  return await fetchFromBackend("/api/sprint-plan/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload && payload.name ? payload.name : "",
+      goal: payload && payload.goal ? payload.goal : "",
+      startDate: payload && payload.startDate ? payload.startDate : "",
+      endDate: payload && payload.endDate ? payload.endDate : "",
+      taskIds: payload && Array.isArray(payload.taskIds) ? payload.taskIds : []
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINT_PLAN.AI_SUGGEST, async (event, payload) => {
+  return await fetchFromBackend("/api/sprint-plan/ai-suggest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      capacity: payload && typeof payload.capacity === "number" ? payload.capacity : 0,
+      sprintLength: payload && typeof payload.sprintLength === "number" ? payload.sprintLength : 0,
+      projectId: payload && payload.projectId ? payload.projectId : undefined
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_PROJECTS, async () => {
+  return await fetchFromBackend("/api/projects");
+});
+
+ipcMain.handle(CHANNELS.SPRINT_PLAN.CREATE_PROJECT, async (event, payload) => {
+  return await fetchFromBackend("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload && payload.name ? payload.name : "",
+      description: payload && payload.description ? payload.description : undefined
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINT_PLAN.GET_PLANNING_SPRINTS, async (event, payload) => {
+  const query = new URLSearchParams();
+  query.set("status", "planning");
+  if (payload && payload.projectId) {
+    query.set("projectId", String(payload.projectId));
+  }
+  return await fetchFromBackend(`/api/sprints?${query.toString()}`);
+});
+
+ipcMain.handle(CHANNELS.SPRINT_PLAN.CREATE_SPRINT, async (event, payload) => {
+  return await fetchFromBackend("/api/sprints", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectId: payload && payload.projectId ? payload.projectId : "",
+      name: payload && payload.name ? payload.name : "",
+      goal: payload && payload.goal ? payload.goal : undefined,
+      startDate: payload && payload.startDate ? payload.startDate : "",
+      endDate: payload && payload.endDate ? payload.endDate : ""
+    })
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINT_PLAN.ARCHIVE_SPRINT, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}/archive`, {
+    method: "PATCH"
+  });
+});
+
+ipcMain.handle(CHANNELS.SPRINT_PLAN.DELETE_SPRINT, async (event, payload) => {
+  const sprintId = payload && payload.sprintId ? String(payload.sprintId) : "";
+  return await fetchFromBackend(`/api/sprints/${encodeURIComponent(sprintId)}`, {
+    method: "DELETE"
+  });
+});
+
 app.whenReady().then(() => {
   createWindow();
 

@@ -56,9 +56,135 @@ type PlanResult = {
   teamBreakdown: TeamBreakdownItem[];
 };
 
+type BacklogItem = {
+  id: string;
+  title?: string;
+  priority?: string;
+  projectId?: string;
+  storyPoints?: number;
+  story_points?: number;
+  techTags?: string[];
+  tech_tags?: string[];
+};
+
+type BacklogResponse = {
+  items?: BacklogItem[];
+  error?: string;
+};
+
+type TeamCapacityResponse = {
+  totalPoints?: number;
+  members?: TeamBreakdownItem[];
+  error?: string;
+};
+
+type AISuggestResponse = {
+  items?: BacklogItem[];
+  suggested?: BacklogItem[];
+  error?: string;
+};
+
+type SavePlanResponse = {
+  sprint?: { id?: string };
+  id?: string;
+  error?: string;
+};
+
+type DesktopInvokeEnvelope<T> = {
+  ok: boolean;
+  data?: T | null;
+  error?: {
+    code?: string;
+    message?: string;
+    detail?: string | null;
+  } | null;
+};
+
+type DesktopResult<T> = {
+  ok: boolean;
+  status: number;
+  data: T | null;
+};
+
+function hasDesktopApi(): boolean {
+  return typeof window !== "undefined" && typeof (window as { desktopApi?: { invoke?: unknown } }).desktopApi?.invoke === "function";
+}
+
+function extractError(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  if (!("error" in data)) return null;
+  const err = (data as { error?: unknown }).error;
+  if (typeof err === "string" && err) return err;
+  if (err && typeof err === "object" && "message" in err) {
+    const msg = (err as { message?: unknown }).message;
+    return typeof msg === "string" && msg ? msg : null;
+  }
+  return null;
+}
+
+async function invokeDesktop<T>(channel: string, payload?: unknown): Promise<DesktopResult<T>> {
+  const desktopApi = (window as unknown as {
+    desktopApi?: { invoke?: (ch: string, args?: unknown) => Promise<unknown> };
+  }).desktopApi;
+
+  if (!hasDesktopApi() || !desktopApi?.invoke) {
+    return { ok: false, status: 500, data: null };
+  }
+
+  const raw = (await desktopApi.invoke(channel, payload)) as DesktopInvokeEnvelope<unknown>;
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, status: 500, data: null };
+  }
+
+  if (!raw.ok) {
+    return {
+      ok: false,
+      status: 500,
+      data: (raw.error?.message ? ({ error: raw.error.message } as T) : null),
+    };
+  }
+
+  const envelope = raw.data;
+  if (envelope && typeof envelope === "object" && "ok" in (envelope as Record<string, unknown>) && "status" in (envelope as Record<string, unknown>)) {
+    const normalized = envelope as { ok: boolean; status: number; data: T | null };
+    return {
+      ok: Boolean(normalized.ok),
+      status: Number(normalized.status) || 200,
+      data: (normalized.data ?? null) as T | null,
+    };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    data: (raw.data as T) ?? null,
+  };
+}
+
+function toPlannedTask(item: BacklogItem): PlannedTask {
+  return {
+    id: String(item.id),
+    sprint_id: "",
+    project_id: String(item.projectId || ""),
+    title: String(item.title || "Untitled task"),
+    story_points: Number(item.story_points ?? item.storyPoints ?? 0),
+    tech_tags: Array.isArray(item.tech_tags) ? item.tech_tags : Array.isArray(item.techTags) ? item.techTags : [],
+    priority: String(item.priority || "low"),
+  };
+}
+
+function daysBetween(startDate?: string, endDate?: string): number {
+  if (!startDate || !endDate) return 14;
+  const start = new Date(startDate).getTime();
+  const end = new Date(endDate).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return 14;
+  return Math.max(1, Math.ceil((end - start) / 86400000));
+}
+
 export default function SprintPlannerPage() {
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [planningSprints, setPlanningSprints] = useState<SprintListItem[]>([]);
+  const [backlogItems, setBacklogItems] = useState<BacklogItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [selectedSprintId, setSelectedSprintId] = useState<string>("");
   const [planResult, setPlanResult] = useState<PlanResult | null>(null);
@@ -90,15 +216,20 @@ export default function SprintPlannerPage() {
     return 'text-red-600 dark:text-red-400';
   };
 
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.warn("[Deprecated Route] /sprint_plan is a legacy alias. Use /sprint-plan instead.");
+    }
+  }, []);
+
   async function loadProjects() {
     setError(null);
     setLoading(true);
     try {
-      const resp = await fetch("/api/projects", { cache: "no-store" });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to load projects"));
+      const resp = await invokeDesktop<{ items?: ProjectListItem[]; error?: string }>("sprintPlan:getProjects");
+      if (!resp.ok) throw new Error(extractError(resp.data) || `Failed to load projects (${resp.status})`);
 
-      const items = Array.isArray(data?.items) ? (data.items as ProjectListItem[]) : [];
+      const items = Array.isArray(resp.data?.items) ? (resp.data.items as ProjectListItem[]) : [];
       setProjects(items);
       if (!selectedProjectId && items.length) {
         setSelectedProjectId(String(items[0].id));
@@ -114,12 +245,10 @@ export default function SprintPlannerPage() {
     setError(null);
     setLoading(true);
     try {
-      const qs = new URLSearchParams({ projectId, status: "planning" });
-      const resp = await fetch(`/api/sprints?${qs.toString()}`, { cache: "no-store" });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to load sprints"));
+      const resp = await invokeDesktop<{ items?: SprintListItem[]; error?: string }>("sprintPlan:getPlanningSprints", { projectId });
+      if (!resp.ok) throw new Error(extractError(resp.data) || `Failed to load sprints (${resp.status})`);
 
-      const items = Array.isArray(data?.items) ? (data.items as SprintListItem[]) : [];
+      const items = Array.isArray(resp.data?.items) ? (resp.data.items as SprintListItem[]) : [];
       setPlanningSprints(items);
       if (!selectedSprintId || !items.some((s) => String(s.id) === String(selectedSprintId))) {
         setSelectedSprintId(items.length ? String(items[0].id) : "");
@@ -133,20 +262,64 @@ export default function SprintPlannerPage() {
     }
   }
 
+  async function loadBacklog(projectId: string) {
+    try {
+      const resp = await invokeDesktop<BacklogResponse>("sprintPlan:getBacklog", { projectId });
+      if (!resp.ok) throw new Error(extractError(resp.data) || `Failed to load backlog (${resp.status})`);
+      setBacklogItems(Array.isArray(resp.data?.items) ? resp.data.items : []);
+    } catch (e) {
+      setBacklogItems([]);
+      setError(e instanceof Error ? e.message : "Failed to load backlog");
+    }
+  }
+
   async function runPlanner() {
     if (!selectedProjectId || !selectedSprintId) return;
     setError(null);
     setPlanning(true);
     try {
-      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}/plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: selectedProjectId }),
-        cache: "no-store",
+      const sprintMeta = planningSprints.find((s) => String(s.id) === String(selectedSprintId)) || null;
+      const startDate = sprintMeta?.startDate || newSprintStartDate;
+      const endDate = sprintMeta?.endDate || newSprintEndDate;
+      const sprintLength = daysBetween(startDate, endDate);
+
+      const capResp = await invokeDesktop<TeamCapacityResponse>("sprintPlan:getTeamCapacity", {
+        startDate,
+        endDate,
       });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Sprint planning failed"));
-      setPlanResult(data as PlanResult);
+      if (!capResp.ok) throw new Error(extractError(capResp.data) || `Failed to load team capacity (${capResp.status})`);
+
+      const totalCapacity = Number(capResp.data?.totalPoints ?? 0);
+      const teamBreakdown = Array.isArray(capResp.data?.members) ? capResp.data.members : [];
+
+      const suggestResp = await invokeDesktop<AISuggestResponse>("sprintPlan:aiSuggest", {
+        capacity: totalCapacity,
+        sprintLength,
+        projectId: selectedProjectId,
+      });
+      if (!suggestResp.ok) throw new Error(extractError(suggestResp.data) || `Sprint planning failed (${suggestResp.status})`);
+
+      const suggestedItems = Array.isArray(suggestResp.data?.items)
+        ? suggestResp.data.items
+        : Array.isArray(suggestResp.data?.suggested)
+          ? suggestResp.data.suggested
+          : [];
+
+      const selected = suggestedItems.length
+        ? suggestedItems
+        : backlogItems.slice(0, Math.max(1, Math.min(backlogItems.length, totalCapacity || backlogItems.length)));
+
+      const selectedTasks = selected.map(toPlannedTask);
+      const totalPoints = selectedTasks.reduce((sum, task) => sum + Number(task.story_points || 0), 0);
+      const capacityUsed = totalCapacity > 0 ? (totalPoints / totalCapacity) * 100 : 0;
+
+      setPlanResult({
+        sprintId: selectedSprintId,
+        selectedTasks,
+        totalPoints,
+        capacityUsed,
+        teamBreakdown,
+      });
     } catch (e) {
       setPlanResult(null);
       setError(e instanceof Error ? e.message : "Sprint planning failed");
@@ -160,22 +333,21 @@ export default function SprintPlannerPage() {
     setError(null);
     setCreatingSprint(true);
     try {
-      const resp = await fetch("/api/sprints", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: selectedProjectId,
-          name: newSprintName,
-          goal: newSprintGoal || undefined,
-          startDate: newSprintStartDate,
-          endDate: newSprintEndDate,
-        }),
-        cache: "no-store",
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to create sprint"));
+      const taskIds = Array.isArray(planResult?.selectedTasks)
+        ? planResult!.selectedTasks.map((task) => String(task.id))
+        : [];
 
-      const createdSprintId = String(data?.sprint?.id || "");
+      const resp = await invokeDesktop<SavePlanResponse>("sprintPlan:savePlan", {
+        projectId: selectedProjectId,
+        name: newSprintName,
+        goal: newSprintGoal || undefined,
+        startDate: newSprintStartDate,
+        endDate: newSprintEndDate,
+        taskIds,
+      });
+      if (!resp.ok) throw new Error(extractError(resp.data) || `Failed to create sprint (${resp.status})`);
+
+      const createdSprintId = String(resp.data?.sprint?.id || resp.data?.id || "");
       await loadPlanningSprints(selectedProjectId);
       if (createdSprintId) setSelectedSprintId(createdSprintId);
 
@@ -196,19 +368,13 @@ export default function SprintPlannerPage() {
     setError(null);
     setCreatingProject(true);
     try {
-      const resp = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: newProjectName.trim(),
-          description: newProjectDescription.trim() || undefined,
-        }),
-        cache: "no-store",
+      const resp = await invokeDesktop<{ project?: { id?: string }; error?: string }>("sprintPlan:createProject", {
+        name: newProjectName.trim(),
+        description: newProjectDescription.trim() || undefined,
       });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to create project"));
+      if (!resp.ok) throw new Error(extractError(resp.data) || `Failed to create project (${resp.status})`);
 
-      const createdProjectId = String(data?.project?.id || "");
+      const createdProjectId = String(resp.data?.project?.id || "");
       await loadProjects();
       if (createdProjectId) setSelectedProjectId(createdProjectId);
 
@@ -230,12 +396,8 @@ export default function SprintPlannerPage() {
     setError(null);
     setActingOnSprint(true);
     try {
-      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}/archive`, {
-        method: "PATCH",
-        cache: "no-store",
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to archive sprint"));
+      const resp = await invokeDesktop<{ error?: string }>("sprintPlan:archiveSprint", { sprintId: selectedSprintId });
+      if (!resp.ok) throw new Error(extractError(resp.data) || `Failed to archive sprint (${resp.status})`);
 
       setPlanResult(null);
       await loadPlanningSprints(selectedProjectId);
@@ -254,12 +416,8 @@ export default function SprintPlannerPage() {
     setError(null);
     setActingOnSprint(true);
     try {
-      const resp = await fetch(`/api/sprints/${encodeURIComponent(selectedSprintId)}`, {
-        method: "DELETE",
-        cache: "no-store",
-      });
-      const data = await resp.json().catch(() => null);
-      if (!resp.ok) throw new Error(String(data?.error || "Failed to delete sprint"));
+      const resp = await invokeDesktop<{ error?: string }>("sprintPlan:deleteSprint", { sprintId: selectedSprintId });
+      if (!resp.ok) throw new Error(extractError(resp.data) || `Failed to delete sprint (${resp.status})`);
 
       setPlanResult(null);
       await loadPlanningSprints(selectedProjectId);
@@ -277,7 +435,10 @@ export default function SprintPlannerPage() {
 
   useEffect(() => {
     setPlanResult(null);
-    if (selectedProjectId) void loadPlanningSprints(selectedProjectId);
+    if (selectedProjectId) {
+      void loadPlanningSprints(selectedProjectId);
+      void loadBacklog(selectedProjectId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
